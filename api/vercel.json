@@ -1,0 +1,19 @@
+{
+  "version": 2,
+  "routes": [
+    {
+      "src": "/bypass",
+      "methods": ["GET"],
+      "dest": "/api/bypass.js"
+    },
+    {
+      "src": "/supported",
+      "methods": ["GET"],
+      "dest": "/api/supported.js"
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/api/index.js"
+    }
+  ]
+}
