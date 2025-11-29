@@ -8,17 +8,23 @@ const calculateDuration = (startTime) => {
     return (duration / 1000).toFixed(2);
 };
 
+// Combined, deduplicated list of supported shorteners/services
 const supportedServices = [
-    "Codex", "Trigon", "rekonise", "linkvertise", "paster-so", "cuttlinks", 
-    "boost-ink-and-bst-gg", "keyguardian", "bstshrt", "nicuse-getkey", 
-    "bit.do", "bit.ly", "blox-script", "cl.gy", "cuty-cuttlinks", "getpolsec", 
-    "goo.gl", "is.gd", "ldnesfspublic", "link-hub.net", "link-unlock-complete", 
-    "link4m.com", "link4sub", "linkunlocker", "lockr", "mboost", "mediafire", 
-    "overdrivehub", "paste-drop", "pastebin", "pastes_io", "quartyz", 
-    "rebrand.ly", "rinku-pro", "rkns.link", "shorteners-and-direct", 
-    "shorter.me", "socialwolvez", "sub2get", "sub4unlock.com", "subfinal", 
-    "t.co", "t.ly", "tiny.cc", "tinylink.onl", "tinyurl.com", 
-    "tpi.li key-system", "v.gd", "work-ink", "ytsubme"
+    "bit.do", "bit.ly", "blox-script.com", "boost.ink", "bst.gg", "bstshrt.com",
+    "cl.gy", "codex.lol (mobile.codex.lol)", "coppy (cuty.io)", "cuttlinks.com",
+    "cuty.io", "getpolsec.com", "getkey.xyz", "goo.gl", "is.gd", "k r n l (krnl.cat)",
+    "keyguardian.net", "keyguardian.org", "keyrblx.com", "ldnesfs.com", "link-hub.net",
+    "link-center.net", "link-target.net", "link-to.net", "link4m.com", "link4sub.com",
+    "link-unlock.com", "linkunlocker.com", "linkvertise.com", "links-loot.com",
+    "linksloot.net", "loot-link.com", "loot-links.com", "lootlink.org", "lootlinks.co",
+    "lootdest.info", "lootdest.org", "lootdest.com", "mboost.me", "mediafire.com",
+    "nicuse.com", "overdrivehub.com", "paster.so", "paste.drop", "pastebin.com",
+    "pastes.io", "pandadevelopment.net", "quartyz.com", "rentry.org", "rebrand.ly",
+    "rinku.pro", "rkns.link", "shorteners-and-direct.com", "shorter.me", "socialwolvez.com",
+    "sub2get.com", "sub4unlock.com", "subfinal.com", "t.co", "t.ly", "tiny.cc",
+    "tinylink.onl", "tinyurl.com", "tpi.li", "trigon", "trigon (wildcard)",
+    "v.gd", "work.ink", "ytsubme.com", "rekonise.com", "key-system (tpi.li key-system)",
+    "lockr.xyz", "mboost", "link-hub", "link-unlock-complete"
 ];
 
 module.exports = (req, res) => {
