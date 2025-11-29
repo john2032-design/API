@@ -9,27 +9,50 @@ const formatDuration = (startNs, endNs = process.hrtime.bigint()) => {
   return `${durationSec.toFixed(3)}s`;
 };
 
-const tryParseJson = (val) => {
-  if (!val) return null;
-  if (typeof val === 'object') return val;
-  try { return JSON.parse(val); } catch (e) { return null; }
+const tryParseJson = (v) => {
+  if (!v) return null;
+  if (typeof v === 'object') return v;
+  try { return JSON.parse(v); } catch (e) { return null; }
 };
 
-const normalizeApi = (raw) => {
-  if (!raw || typeof raw !== 'object') return null;
-  const status = raw.status ?? (raw.statusCode ? (raw.statusCode >= 200 && raw.statusCode < 300 ? 'success' : 'error') : 'error');
-  const action = raw.action ?? 'bypass-url';
-  const result = raw.result ?? raw.message ?? raw.error ?? null;
-  const made_by = raw.made_by ?? raw.created_by ?? null;
-  const website = raw.website ?? raw.source ?? null;
-  const time_taken = raw.time_taken ?? raw.time ?? null;
-  return { status, action, result, made_by, website, time_taken, raw };
+const normalizeToMinimal = (raw, measuredTime) => {
+  // raw may be null / object / string
+  const obj = (typeof raw === 'object') ? raw : tryParseJson(raw);
+  // Determine status: prefer explicit string 'success', otherwise treat anything else as 'error'
+  let status = null;
+  if (obj && (typeof obj.status === 'string')) {
+    status = obj.status.toLowerCase() === 'success' ? 'success' : 'error';
+  } else if (obj && (typeof obj.status === 'number' || typeof obj.statusCode === 'number')) {
+    const code = obj.status ?? obj.statusCode;
+    status = (code >= 200 && code < 300) ? 'success' : 'error';
+  } else {
+    // if upstream didn't indicate status, we don't assume success — caller code will set success when appropriate
+    status = null;
+  }
+
+  // Result: only take explicit result/message/error fields if present, otherwise null
+  const result = obj?.result ?? obj?.message ?? obj?.error ?? null;
+
+  // time_taken: use upstream field if provided, otherwise use measuredTime
+  let timeTaken = obj?.time_taken ?? obj?.time ?? measuredTime;
+  if (typeof timeTaken === 'number') timeTaken = `${Number(timeTaken).toFixed(3)}s`;
+  if (typeof timeTaken === 'string' && /^\d+(\.\d+)?$/.test(timeTaken)) {
+    timeTaken = `${Number(timeTaken).toFixed(3)}s`;
+  }
+  // final fallback ensure it's a string
+  if (!timeTaken) timeTaken = measuredTime ?? '0.000s';
+
+  return {
+    status: status === 'success' ? 'success' : (status === 'error' ? 'error' : null),
+    result: result ?? null,
+    time_taken: timeTaken
+  };
 };
 
 module.exports = async (req, res) => {
   const handlerStart = getCurrentTime();
 
-  // CORS
+  // CORS & headers
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
@@ -43,134 +66,118 @@ module.exports = async (req, res) => {
 
   if (req.method !== 'GET') {
     return res.status(405).json({
-      status: "error",
-      result: "Method not allowed. Use GET.",
-      server_time_taken: formatDuration(handlerStart)
+      status: 'error',
+      result: 'Method not allowed. Use GET.',
+      time_taken: formatDuration(handlerStart) // minimal top-level time_taken for consistency
     });
   }
 
   const url = req.query.url;
   if (!url) {
     return res.status(400).json({
-      status: "error",
-      result: "URL parameter is required",
-      server_time_taken: formatDuration(handlerStart)
+      status: 'error',
+      result: 'URL parameter is required',
+      time_taken: formatDuration(handlerStart)
     });
   }
 
-  // Upstream endpoints and API keys (adjust env vars as needed)
+  // Configurable upstream endpoints (set via env vars)
   const EAS_API_BASE = process.env.EAS_API_BASE || 'https://eas-bypass.example/api/bypass';
   const EAS_API_KEY = process.env.EAS_API_KEY || 'EAS_API_KEY_PLACEHOLDER';
   const ACE_API_BASE = process.env.ACE_API_BASE || 'https://ace-bypass.com/api/bypass';
   const ACE_API_KEY = process.env.ACE_API_KEY || 'FREE_S7MdXC0momgajOEx1_UKW7FQUvbmzvalu0gTwr-V6cI';
 
-  // Build candidate upstream calls in order (EAS first if URL contains 'loot')
+  // Decide order: EAS first for loot URLs, then ACE as fallback
   const shouldUseEas = /(^https?:\/\/)?(www\.)?loot/i.test(url) || url.includes('://loot');
   const candidates = [];
-
   if (shouldUseEas) {
     candidates.push({
       name: 'EAS',
       url: `${EAS_API_BASE}?url=${encodeURIComponent(url)}&apikey=${encodeURIComponent(EAS_API_KEY)}`
     });
   }
-  // always include ace-bypass as fallback
   candidates.push({
     name: 'ACE',
     url: `${ACE_API_BASE}?url=${encodeURIComponent(url)}&apikey=${encodeURIComponent(ACE_API_KEY)}`
   });
 
   const apis = [];
-
-  // Try each candidate in order until one returns a success-like response
-  let topStatus = 'success';
-  let topResult = 'API Proxy Service';
-  let upstreamUsed = null;
+  let chosen = null; // will hold the minimal normalized object from the first success or last error
 
   for (const candidate of candidates) {
     const apiStart = getCurrentTime();
-    let apiResp = { name: candidate.name, requested_url: candidate.url, error: null, duration: null, raw: null };
-
     try {
       const response = await axios.get(candidate.url, { timeout: 12_000 });
-      apiResp.duration = formatDuration(apiStart);
-      apiResp.raw = tryParseJson(response.data) ?? response.data;
+      const apiEnd = getCurrentTime();
+      const measured = formatDuration(apiStart, apiEnd);
 
-      // Normalize and push
-      const normalized = normalizeApi(apiResp.raw) ?? {
-        status: response.status >= 200 && response.status < 300 ? 'success' : 'error',
-        action: 'bypass-url',
-        result: apiResp.raw ?? response.data,
-        made_by: null,
-        website: candidate.name.toLowerCase(),
-        time_taken: apiResp.duration,
-        raw: apiResp.raw ?? response.data
-      };
-      // ensure time_taken
-      normalized.time_taken = normalized.time_taken ?? apiResp.duration;
+      const parsed = tryParseJson(response.data) ?? response.data;
+      const minimal = normalizeToMinimal(parsed, measured);
 
-      apis.push({ provider: candidate.name, ok: true, normalized });
+      // If upstream provided no explicit status, infer success from HTTP status
+      if (minimal.status === null) {
+        minimal.status = (response.status >= 200 && response.status < 300) ? 'success' : 'error';
+      }
+      // Ensure time_taken is present
+      minimal.time_taken = minimal.time_taken ?? measured;
 
-      // If upstream returned a 'success' status field, use it as top-level; if it's 'error' continue to fallback
-      const upstreamStatus = (normalized.status || '').toLowerCase();
-      if (upstreamStatus === 'success') {
-        topStatus = normalized.status;
-        topResult = normalized.result ?? 'Bypass succeeded';
-        upstreamUsed = candidate.name;
-        break; // success — stop trying more candidates
+      apis.push(minimal);
+
+      if (minimal.status === 'success') {
+        chosen = minimal;
+        break; // stop at first success
       } else {
-        // keep the error normalized info but try fallback
-        apis[apis.length - 1].ok = false;
-        apis[apis.length - 1].error_note = 'Upstream reported error status';
-        // set topStatus/result to the most recent upstream error for transparency
-        topStatus = normalized.status || 'error';
-        topResult = normalized.result || normalized.raw || `Upstream ${candidate.name} returned an error`;
-        // continue to next candidate
+        // keep trying fallback(s); chosen becomes latest error for transparency if no success found
+        chosen = minimal;
       }
     } catch (err) {
-      const end = getCurrentTime();
-      apiResp.duration = formatDuration(apiStart, end);
+      const apiEnd = getCurrentTime();
+      const measured = formatDuration(apiStart, apiEnd);
 
-      // Build error description
-      let errMsg = 'Unknown error';
+      // Build a concise error result (string) and keep only minimal fields
+      let errMsg = 'An error occurred';
       if (err.code === 'ECONNREFUSED') errMsg = 'Unable to connect to bypass service';
       else if (err.code === 'ETIMEDOUT') errMsg = 'Request timeout - service unavailable';
-      else if (err.response) errMsg = `Service error: ${err.response.status}`;
-      else if (err.message) errMsg = err.message;
+      else if (err.response) {
+        // try to extract a short message from response body if possible
+        const parsed = tryParseJson(err.response.data) ?? err.response.data;
+        errMsg = (parsed && (parsed.result || parsed.message || parsed.error)) || `Service error: ${err.response.status}`;
+      } else if (err.message) errMsg = err.message;
 
-      apiResp.error = errMsg;
-      apis.push({
-        provider: candidate.name,
-        ok: false,
-        normalized: {
-          status: 'error',
-          action: 'bypass-url',
-          result: `Bypass service returned an error: ${errMsg}`,
-          made_by: null,
-          website: candidate.name.toLowerCase(),
-          time_taken: apiResp.duration,
-          raw: err.response ? tryParseJson(err.response.data) ?? err.response.data : null
-        }
-      });
+      const minimal = {
+        status: 'error',
+        result: errMsg,
+        time_taken: measured
+      };
 
-      // set top-level to this error but continue to next candidate
-      topStatus = 'error';
-      topResult = `Bypass service returned an error: ${errMsg}`;
-      // continue trying fallback(s)
+      apis.push(minimal);
+      chosen = minimal;
+      // continue to next candidate
     }
-  } // end for candidates
+  }
 
-  // final handler time
-  const serverTime = formatDuration(handlerStart);
+  // If no upstream attempts were recorded (shouldn't happen), return a default error
+  if (apis.length === 0) {
+    const fallback = {
+      status: 'error',
+      result: 'No upstream attempts made',
+      time_taken: formatDuration(handlerStart)
+    };
+    return res.status(200).json({
+      status: fallback.status,
+      result: fallback.result,
+      time_taken: fallback.time_taken,
+      server_time_taken: formatDuration(handlerStart)
+    });
+  }
 
-  // If none succeeded, topStatus/topResult reflect the last upstream attempt error
-  const code = topStatus && topStatus.toLowerCase() === 'success' ? 200 : 200; // keep 200 so client receives payload (your previous behavior used 200 on upstream error examples)
-  return res.status(code).json({
-    status: topStatus,
-    result: topResult,
-    message: "API Proxy Service",
-    upstream_used: upstreamUsed ?? null,
-    apis, // array of attempted upstream responses (normalized)
-    server_time_taken: serverTime
+  // Respond using chosen upstream minimal fields as top-level (status/result/time_taken)
+  const top = chosen ?? apis[apis.length - 1];
+  return res.status(200).json({
+    status: top.status || 'error',
+    result: top.result ?? null,
+    time_taken: top.time_taken ?? formatDuration(handlerStart),
+    apis, // array of entries each with exactly {status, result, time_taken}
+    server_time_taken: formatDuration(handlerStart)
   });
 };
