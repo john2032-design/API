@@ -16,30 +16,25 @@ const tryParseJson = (v) => {
 };
 
 const normalizeToMinimal = (raw, measuredTime) => {
-  // raw may be null / object / string
   const obj = (typeof raw === 'object') ? raw : tryParseJson(raw);
-  // Determine status: prefer explicit string 'success', otherwise treat anything else as 'error'
+  // status detection
   let status = null;
-  if (obj && (typeof obj.status === 'string')) {
+  if (obj && typeof obj.status === 'string') {
     status = obj.status.toLowerCase() === 'success' ? 'success' : 'error';
   } else if (obj && (typeof obj.status === 'number' || typeof obj.statusCode === 'number')) {
     const code = obj.status ?? obj.statusCode;
     status = (code >= 200 && code < 300) ? 'success' : 'error';
   } else {
-    // if upstream didn't indicate status, we don't assume success — caller code will set success when appropriate
     status = null;
   }
 
-  // Result: only take explicit result/message/error fields if present, otherwise null
   const result = obj?.result ?? obj?.message ?? obj?.error ?? null;
 
-  // time_taken: use upstream field if provided, otherwise use measuredTime
   let timeTaken = obj?.time_taken ?? obj?.time ?? measuredTime;
   if (typeof timeTaken === 'number') timeTaken = `${Number(timeTaken).toFixed(3)}s`;
   if (typeof timeTaken === 'string' && /^\d+(\.\d+)?$/.test(timeTaken)) {
     timeTaken = `${Number(timeTaken).toFixed(3)}s`;
   }
-  // final fallback ensure it's a string
   if (!timeTaken) timeTaken = measuredTime ?? '0.000s';
 
   return {
@@ -68,7 +63,7 @@ module.exports = async (req, res) => {
     return res.status(405).json({
       status: 'error',
       result: 'Method not allowed. Use GET.',
-      time_taken: formatDuration(handlerStart) // minimal top-level time_taken for consistency
+      time_taken: formatDuration(handlerStart)
     });
   }
 
@@ -81,82 +76,175 @@ module.exports = async (req, res) => {
     });
   }
 
-  // Configurable upstream endpoints (set via env vars)
-  const EAS_API_BASE = process.env.EAS_API_BASE || 'https://eas-bypass.example/api/bypass';
-  const EAS_API_KEY = process.env.EAS_API_KEY || 'EAS_API_KEY_PLACEHOLDER';
+  // === Config ===
+  // EAS-X (new API) - POST with JSON body, no timeout
+  const EASX_API_URL = 'https://api.eas-x.com/v3/bypass';
+  const EASX_API_KEY = '.john2032-3253f-3262k-3631f-2626j-9078k';
+
+  // ACE (fallback / default) - GET with query param, keep timeout for ACE
   const ACE_API_BASE = process.env.ACE_API_BASE || 'https://ace-bypass.com/api/bypass';
   const ACE_API_KEY = process.env.ACE_API_KEY || 'FREE_S7MdXC0momgajOEx1_UKW7FQUvbmzvalu0gTwr-V6cI';
+  const ACE_TIMEOUT_MS = 12_000;
 
-  // Decide order: EAS first for loot URLs, then ACE as fallback
-  const shouldUseEas = /(^https?:\/\/)?(www\.)?loot/i.test(url) || url.includes('://loot');
+  // Domain rules
+  const easOnlyDomains = [
+    "rentry.org","paster.so","loot-link.com","loot-links.com","lootlink.org",
+    "lootlinks.co","lootdest.info","lootdest.org","lootdest.com","links-loot.com","linksloot.net"
+  ].map(d => d.toLowerCase());
+
+  const easFirstThenAceDomains = [
+    "linkvertise.com","link-target.net","link-center.net","link-to.net"
+  ].map(d => d.toLowerCase());
+
+  const hostLower = (() => {
+    try {
+      const u = new URL(url);
+      return (u.hostname || '').toLowerCase();
+    } catch (e) {
+      // If URL parsing fails, fallback to using the raw url string lowercased
+      return url.toLowerCase();
+    }
+  })();
+
+  const isHostInList = (lists) => lists.some(domain => hostLower === domain || hostLower.endsWith('.' + domain) || hostLower.includes(domain));
+
+  // Build candidate behavior based on domain rules
+  // Candidates are objects like { type: 'easx' } or { type: 'ace' }
   const candidates = [];
-  if (shouldUseEas) {
-    candidates.push({
-      name: 'EAS',
-      url: `${EAS_API_BASE}?url=${encodeURIComponent(url)}&apikey=${encodeURIComponent(EAS_API_KEY)}`
-    });
+
+  if (isHostInList(easOnlyDomains)) {
+    // Only use eas-x (no fallback)
+    candidates.push({ type: 'easx' });
+  } else if (isHostInList(easFirstThenAceDomains)) {
+    // Try eas-x first, then ACE fallback
+    candidates.push({ type: 'easx' }, { type: 'ace' });
+  } else {
+    // Default: use ACE only
+    candidates.push({ type: 'ace' });
   }
-  candidates.push({
-    name: 'ACE',
-    url: `${ACE_API_BASE}?url=${encodeURIComponent(url)}&apikey=${encodeURIComponent(ACE_API_KEY)}`
-  });
 
   const apis = [];
-  let chosen = null; // will hold the minimal normalized object from the first success or last error
+  let chosen = null;
 
   for (const candidate of candidates) {
     const apiStart = getCurrentTime();
-    try {
-      const response = await axios.get(candidate.url, { timeout: 12_000 });
-      const apiEnd = getCurrentTime();
-      const measured = formatDuration(apiStart, apiEnd);
 
-      const parsed = tryParseJson(response.data) ?? response.data;
-      const minimal = normalizeToMinimal(parsed, measured);
+    if (candidate.type === 'easx') {
+      // POST json body, no timeout, required headers exactly as specified
+      try {
+        const response = await axios.post(
+          EASX_API_URL,
+          { url: url },
+          {
+            headers: {
+              'accept': 'application/json',
+              'eas-api-key': EASX_API_KEY,
+              'Content-Type': 'application/json'
+            }
+            // intentionally no timeout here (per your instruction)
+          }
+        );
+        const apiEnd = getCurrentTime();
+        const measured = formatDuration(apiStart, apiEnd);
 
-      // If upstream provided no explicit status, infer success from HTTP status
-      if (minimal.status === null) {
-        minimal.status = (response.status >= 200 && response.status < 300) ? 'success' : 'error';
-      }
-      // Ensure time_taken is present
-      minimal.time_taken = minimal.time_taken ?? measured;
+        const parsed = tryParseJson(response.data) ?? response.data;
+        const minimal = normalizeToMinimal(parsed, measured);
 
-      apis.push(minimal);
+        // If upstream provided no explicit status, infer from HTTP status
+        if (minimal.status === null) {
+          minimal.status = (response.status >= 200 && response.status < 300) ? 'success' : 'error';
+        }
+        minimal.time_taken = minimal.time_taken ?? measured;
 
-      if (minimal.status === 'success') {
+        apis.push(minimal);
+        if (minimal.status === 'success') {
+          chosen = minimal;
+          break; // stop at first success
+        } else {
+          // If domain was easOnlyDomains, do not fallback — return this error
+          if (isHostInList(easOnlyDomains)) {
+            chosen = minimal;
+            break;
+          }
+          // otherwise continue to next candidate (e.g., ACE)
+          chosen = minimal;
+        }
+      } catch (err) {
+        const apiEnd = getCurrentTime();
+        const measured = formatDuration(apiStart, apiEnd);
+
+        // concise error message
+        let errMsg = 'An error occurred';
+        if (err.code === 'ECONNREFUSED') errMsg = 'Unable to connect to eas-x service';
+        else if (err.code === 'ETIMEDOUT') errMsg = 'Request timeout - service unavailable';
+        else if (err.response) {
+          const parsed = tryParseJson(err.response.data) ?? err.response.data;
+          errMsg = (parsed && (parsed.result || parsed.message || parsed.error)) || `Service error: ${err.response.status}`;
+        } else if (err.message) errMsg = err.message;
+
+        const minimal = {
+          status: 'error',
+          result: errMsg,
+          time_taken: measured
+        };
+
+        apis.push(minimal);
         chosen = minimal;
-        break; // stop at first success
-      } else {
-        // keep trying fallback(s); chosen becomes latest error for transparency if no success found
-        chosen = minimal;
+
+        // If this host is in easOnlyDomains, do not continue to fallback; break
+        if (isHostInList(easOnlyDomains)) break;
+        // else continue to next candidate (ACE)
       }
-    } catch (err) {
-      const apiEnd = getCurrentTime();
-      const measured = formatDuration(apiStart, apiEnd);
+    } else if (candidate.type === 'ace') {
+      // ACE: GET with query params, keep timeout
+      try {
+        const aceUrl = `${ACE_API_BASE}?url=${encodeURIComponent(url)}&apikey=${encodeURIComponent(ACE_API_KEY)}`;
+        const response = await axios.get(aceUrl, { timeout: ACE_TIMEOUT_MS });
+        const apiEnd = getCurrentTime();
+        const measured = formatDuration(apiStart, apiEnd);
 
-      // Build a concise error result (string) and keep only minimal fields
-      let errMsg = 'An error occurred';
-      if (err.code === 'ECONNREFUSED') errMsg = 'Unable to connect to bypass service';
-      else if (err.code === 'ETIMEDOUT') errMsg = 'Request timeout - service unavailable';
-      else if (err.response) {
-        // try to extract a short message from response body if possible
-        const parsed = tryParseJson(err.response.data) ?? err.response.data;
-        errMsg = (parsed && (parsed.result || parsed.message || parsed.error)) || `Service error: ${err.response.status}`;
-      } else if (err.message) errMsg = err.message;
+        const parsed = tryParseJson(response.data) ?? response.data;
+        const minimal = normalizeToMinimal(parsed, measured);
 
-      const minimal = {
-        status: 'error',
-        result: errMsg,
-        time_taken: measured
-      };
+        if (minimal.status === null) {
+          minimal.status = (response.status >= 200 && response.status < 300) ? 'success' : 'error';
+        }
+        minimal.time_taken = minimal.time_taken ?? measured;
 
-      apis.push(minimal);
-      chosen = minimal;
-      // continue to next candidate
+        apis.push(minimal);
+        if (minimal.status === 'success') {
+          chosen = minimal;
+          break;
+        } else {
+          chosen = minimal;
+          // continue if there were more candidates (unlikely for ACE)
+        }
+      } catch (err) {
+        const apiEnd = getCurrentTime();
+        const measured = formatDuration(apiStart, apiEnd);
+
+        let errMsg = 'An error occurred';
+        if (err.code === 'ECONNREFUSED') errMsg = 'Unable to connect to ACE bypass service';
+        else if (err.code === 'ETIMEDOUT') errMsg = 'Request timeout - ACE service unavailable';
+        else if (err.response) {
+          const parsed = tryParseJson(err.response.data) ?? err.response.data;
+          errMsg = (parsed && (parsed.result || parsed.message || parsed.error)) || `Service error: ${err.response.status}`;
+        } else if (err.message) errMsg = err.message;
+
+        const minimal = {
+          status: 'error',
+          result: errMsg,
+          time_taken: measured
+        };
+
+        apis.push(minimal);
+        chosen = minimal;
+        // continue to next candidate if any
+      }
     }
-  }
+  } // end for candidates
 
-  // If no upstream attempts were recorded (shouldn't happen), return a default error
+  // If nothing recorded, fallback minimal error
   if (apis.length === 0) {
     const fallback = {
       status: 'error',
@@ -166,18 +254,18 @@ module.exports = async (req, res) => {
     return res.status(200).json({
       status: fallback.status,
       result: fallback.result,
-      time_taken: fallback.time_taken,
-      server_time_taken: formatDuration(handlerStart)
+      time_taken: fallback.time_taken
     });
   }
 
-  // Respond using chosen upstream minimal fields as top-level (status/result/time_taken)
+  // Top-level fields must be exactly {status, result, time_taken} from chosen (success or last error)
   const top = chosen ?? apis[apis.length - 1];
+
+  // Respond (HTTP 200 to match your previous behavior)
   return res.status(200).json({
     status: top.status || 'error',
     result: top.result ?? null,
     time_taken: top.time_taken ?? formatDuration(handlerStart),
-    apis, // array of entries each with exactly {status, result, time_taken}
-    server_time_taken: formatDuration(handlerStart)
+    apis // each entry is exactly {status, result, time_taken}
   });
 };
