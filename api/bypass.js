@@ -15,41 +15,41 @@ const tryParseJson = (v) => {
 
 const normalizeToMinimal = (raw, measuredTime) => {
   const obj = (typeof raw === 'object') ? raw : tryParseJson(raw);
+
+  let result = obj?.result ?? obj?.message ?? obj?.error ?? obj?.data ?? null;
   let status = null;
+
   if (obj && typeof obj.status === 'string') {
     status = obj.status.toLowerCase() === 'success' ? 'success' : 'error';
-  } else if (obj && (typeof obj.status === 'number' || typeof obj.statusCode === 'number')) {
+  } else if (obj && (obj.status || obj.statusCode)) {
     const code = obj.status ?? obj.statusCode;
     status = (code >= 200 && code < 300) ? 'success' : 'error';
   } else {
     status = null;
   }
-  const result = obj?.result ?? obj?.message ?? obj?.error ?? null;
+
   let timeTaken = obj?.time_taken ?? obj?.time ?? measuredTime;
-  if (typeof timeTaken === 'number') timeTaken = `${Number(timeTaken).toFixed(3)}s`;
-  if (typeof timeTaken === 'string' && /^\d+(\.\d+)?$/.test(timeTaken)) {
-    timeTaken = `${Number(timeTaken).toFixed(3)}s`;
-  }
-  if (!timeTaken) timeTaken = measuredTime ?? '0.000s';
-  return {
-    status: status === 'success' ? 'success' : (status === 'error' ? 'error' : null),
-    result: result ?? null,
-    time_taken: timeTaken
-  };
+  if (typeof timeTaken === 'number') timeTaken = `${timeTaken.toFixed(3)}s`;
+  if (!timeTaken || timeTaken === '0') timeTaken = measuredTime;
+
+  return { status, result, time_taken: timeTaken };
+};
+
+const isUnsupported = (msg) => {
+  if (!msg) return false;
+  const lower = msg.toString().toLowerCase();
+  return /unsupported|not supported|not support/i.test(lower);
 };
 
 module.exports = async (req, res) => {
   const handlerStart = getCurrentTime();
 
-  // CORS Headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
 
   if (!['GET', 'POST'].includes(req.method)) {
     return res.status(405).json({
@@ -74,12 +74,12 @@ module.exports = async (req, res) => {
   } catch (e) {
     return res.status(500).json({
       status: 'error',
-      result: 'Missing dependency: axios. Run `npm install axios` and redeploy.',
+      result: 'Missing dependency: axios',
       time_taken: formatDuration(handlerStart)
     });
   }
 
-  // === API CONFIGURATION ===
+  // === API CONFIG ===
   const EASX_API_URL = 'https://api.eas-x.com/v3/bypass';
   const EASX_API_KEY = process.env.EASX_API_KEY || '.john2032-3253f-3262k-3631f-2626j-9078k';
 
@@ -91,15 +91,8 @@ module.exports = async (req, res) => {
 
   // === DOMAIN LISTS ===
   const voltarOnlyDomains = [
-    'key.valex.io',
-    'auth.platoboost',
-    'work.ink',
-    'link4m.com',
-    'keyrblx.com',
-    'link4sub.com',
-    'linkify.ru',
-    'sub4unlock.io',
-    'sub2unlock'
+    'key.valex.io', 'auth.platoboost', 'work.ink', 'link4m.com',
+    'keyrblx.com', 'link4sub.com', 'linkify.ru', 'sub4unlock.io', 'sub2unlock'
   ].map(d => d.toLowerCase());
 
   const easOnlyDomains = [
@@ -107,36 +100,35 @@ module.exports = async (req, res) => {
     'lootlinks.co', 'lootdest.info', 'lootdest.org', 'lootdest.com', 'links-loot.com', 'linksloot.net'
   ].map(d => d.toLowerCase());
 
-  const linkvertiseAndSimilar = [
+  const linkvertiseDomains = [
     'linkvertise.com', 'link-target.net', 'link-center.net', 'link-to.net'
   ].map(d => d.toLowerCase());
 
-  // === Extract hostname ===
+  // === Get hostname ===
   let hostname = '';
   try {
-    const u = new URL(url);
-    hostname = u.hostname.toLowerCase();
+    hostname = new URL(url).hostname.toLowerCase();
   } catch (e) {
-    hostname = url.toLowerCase().split('/')[2] || '';
+    const match = url.match(/https?:\/\/([^\/]+)/i);
+    hostname = match ? match[1].toLowerCase() : '';
   }
 
-  const isHostInList = (list) => list.some(domain => hostname === domain || hostname.endsWith('.' + domain));
+  const isHostInList = (list) => list.some(d => hostname === d || hostname.endsWith('.' + d));
 
-  // === Determine API candidate order ===
+  // === Decide API order ===
   let candidates = [];
 
   if (isHostInList(voltarOnlyDomains)) {
     candidates = [{ type: 'voltar' }];
   } else if (isHostInList(easOnlyDomains)) {
     candidates = [{ type: 'easx' }];
-  } else if (isHostInList(linkvertiseAndSimilar)) {
+  } else if (isHostInList(linkvertiseDomains)) {
     candidates = [{ type: 'voltar' }, { type: 'easx' }, { type: 'ace' }];
   } else {
-    // Default: Try Voltar first (highest success), then ACE, then EAS-X
     candidates = [{ type: 'voltar' }, { type: 'ace' }, { type: 'easx' }];
   }
 
-  let chosen = null;
+  let result = null;
 
   for (const candidate of candidates) {
     const apiStart = getCurrentTime();
@@ -150,7 +142,6 @@ module.exports = async (req, res) => {
             'Content-Type': 'application/json',
             'x-api-key': VOLTAR_API_KEY
           }
-          // No timeout
         });
       } else if (candidate.type === 'easx') {
         response = await axios.post(EASX_API_URL, { url }, {
@@ -159,64 +150,56 @@ module.exports = async (req, res) => {
             'eas-api-key': EASX_API_KEY,
             'Content-Type': 'application/json'
           }
-          // No timeout
         });
       } else { // ace
-        const aceUrl = `${ACE_API_BASE}?url=${encodeURIComponent(url)}&apikey=${encodeURIComponent(ACE_API_KEY)}`;
-        response = await axios.get(aceUrl); // No timeout
+        const aceUrl = `${ACE_API_BASE}?url=${encodeURIComponent(url)}&apikey=${ACE_API_KEY}`;
+        response = await axios.get(aceUrl);
       }
 
       const measured = formatDuration(apiStart);
-      const data = response.data;
-      const parsed = tryParseJson(data) ?? data;
-      const minimal = normalizeToMinimal(parsed, measured);
+      const { status, result: apiResult } = normalizeToMinimal(response.data, measured);
 
-      if (minimal.status === null) {
-        minimal.status = (response.status >= 200 && response.status < 300) ? 'success' : 'error';
+      if (status === 'success' && apiResult) {
+        return res.status(200).json({
+          status: 'success',
+          result: apiResult,
+          time_taken: measured
+        });
       }
-      minimal.time_taken = minimal.time_taken ?? measured;
 
-      chosen = minimal;
-      if (minimal.status === 'success') break;
+      // If not success, check for unsupported
+      if (apiResult && isUnsupported(apiResult)) {
+        result = { status: 'error', result: 'Link Not Supported Rip', time_taken: measured };
+      } else {
+        result = { status: 'error', result: 'Bypass Failed :(', time_taken: measured };
+      }
+
+      // Stop fallback early for Voltar-only domains
+      if (candidate.type === 'voltar' && isHostInList(voltarOnlyDomains)) break;
 
     } catch (err) {
       const measured = formatDuration(apiStart);
-      let errMsg = 'Unknown error';
+      let errorMsg = 'Bypass Failed :(';
 
-      if (err.code === 'ECONNREFUSED') errMsg = 'Service refused connection';
-      else if (err.code === 'ENOTFOUND') errMsg = 'Service not found';
-      else if (err.response) {
-        const data = tryParseJson(err.response.data) ?? err.response.data;
-        errMsg = data?.message || data?.error || data?.result || `HTTP ${err.response.status}`;
-      } else if (err.message) {
-        errMsg = err.message;
+      if (err.response) {
+        const data = tryParseJson(err.response.data);
+        const msg = data?.message || data?.error || data?.result || '';
+        if (isUnsupported(msg)) {
+          errorMsg = 'Link Not Supported Rip';
+        }
       }
 
-      chosen = {
-        status: 'error',
-        result: `${candidate.type.toUpperCase()}: ${errMsg}`,
-        time_taken: measured
-      };
+      result = { status: 'error', result: errorMsg, time_taken: measured };
 
-      // Do NOT fallback if it's a Voltar-only domain
-      if (candidate.type === 'voltar' && isHostInList(voltarOnlyDomains)) {
-        break;
-      }
+      // Don't fallback if Voltar-only domain failed
+      if (candidate.type === 'voltar' && isHostInList(voltarOnlyDomains)) break;
     }
   }
 
-  // Final fallback if nothing worked
-  if (!chosen) {
-    return res.status(200).json({
-      status: 'error',
-      result: 'All bypass services failed',
-      time_taken: formatDuration(handlerStart)
-    });
-  }
-
+  // Final response
   return res.status(200).json({
-    status: chosen.status || 'error',
-    result: chosen.result ?? null,
-    time_taken: chosen.time_taken ?? formatDuration(handlerStart)
+    status: result.status || 'error',
+    result: result.result || 'Bypass Failed :(',
+    time_taken: result.time_taken || formatDuration(handlerStart)
   });
 };
