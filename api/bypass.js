@@ -40,7 +40,8 @@ const normalizeToMinimal = (raw, measuredTime) => {
 
 module.exports = async (req, res) => {
   const handlerStart = getCurrentTime();
-  // Simple CORS & JSON content-type
+
+  // CORS Headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -50,8 +51,7 @@ module.exports = async (req, res) => {
     return res.status(200).end();
   }
 
-  // Allow GET and POST for flexibility
-  if (!['GET','POST'].includes(req.method)) {
+  if (!['GET', 'POST'].includes(req.method)) {
     return res.status(405).json({
       status: 'error',
       result: 'Method not allowed. Use GET or POST.',
@@ -59,7 +59,6 @@ module.exports = async (req, res) => {
     });
   }
 
-  // Get url param (support query or JSON body)
   const url = (req.method === 'GET' ? req.query.url : (req.body && req.body.url)) || null;
   if (!url) {
     return res.status(400).json({
@@ -69,7 +68,6 @@ module.exports = async (req, res) => {
     });
   }
 
-  // Defensive: require axios dynamically and handle missing dependency
   let axios;
   try {
     axios = require('axios');
@@ -81,114 +79,137 @@ module.exports = async (req, res) => {
     });
   }
 
-  // Config
+  // === API CONFIGURATION ===
   const EASX_API_URL = 'https://api.eas-x.com/v3/bypass';
   const EASX_API_KEY = process.env.EASX_API_KEY || '.john2032-3253f-3262k-3631f-2626j-9078k';
+
   const ACE_API_BASE = process.env.ACE_API_BASE || 'https://ace-bypass.com/api/bypass';
   const ACE_API_KEY = process.env.ACE_API_KEY || 'FREE_S7MdXC0momgajOEx1_UKW7FQUvbmzvalu0gTwr-V6cI';
 
-  // Domain rules
+  const VOLTAR_API_URL = 'http://77.110.121.76:3000/bypass';
+  const VOLTAR_API_KEY = '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa';
+
+  // === DOMAIN LISTS ===
+  const voltarOnlyDomains = [
+    'key.valex.io',
+    'auth.platoboost',
+    'work.ink',
+    'link4m.com',
+    'keyrblx.com',
+    'link4sub.com',
+    'linkify.ru',
+    'sub4unlock.io',
+    'sub2unlock'
+  ].map(d => d.toLowerCase());
+
   const easOnlyDomains = [
-    "rentry.org","paster.so","loot-link.com","loot-links.com","lootlink.org",
-    "lootlinks.co","lootdest.info","lootdest.org","lootdest.com","links-loot.com","linksloot.net"
-  ].map(d => d.toLowerCase());
-  const easFirstThenAceDomains = [
-    "linkvertise.com","link-target.net","link-center.net","link-to.net"
+    'rentry.org', 'paster.so', 'loot-link.com', 'loot-links.com', 'lootlink.org',
+    'lootlinks.co', 'lootdest.info', 'lootdest.org', 'lootdest.com', 'links-loot.com', 'linksloot.net'
   ].map(d => d.toLowerCase());
 
-  const hostLower = (() => {
-    try {
-      const u = new URL(url);
-      return (u.hostname || '').toLowerCase();
-    } catch (e) {
-      return url.toLowerCase();
-    }
-  })();
+  const linkvertiseAndSimilar = [
+    'linkvertise.com', 'link-target.net', 'link-center.net', 'link-to.net'
+  ].map(d => d.toLowerCase());
 
-  const isHostInList = (lists) => lists.some(domain => hostLower === domain || hostLower.endsWith('.' + domain) || hostLower.includes(domain));
+  // === Extract hostname ===
+  let hostname = '';
+  try {
+    const u = new URL(url);
+    hostname = u.hostname.toLowerCase();
+  } catch (e) {
+    hostname = url.toLowerCase().split('/')[2] || '';
+  }
 
-  // Build candidates
-  const candidates = [];
-  if (isHostInList(easOnlyDomains)) candidates.push({ type: 'easx' });
-  else if (isHostInList(easFirstThenAceDomains)) candidates.push({ type: 'easx' }, { type: 'ace' });
-  else candidates.push({ type: 'ace' });
+  const isHostInList = (list) => list.some(domain => hostname === domain || hostname.endsWith('.' + domain));
+
+  // === Determine API candidate order ===
+  let candidates = [];
+
+  if (isHostInList(voltarOnlyDomains)) {
+    candidates = [{ type: 'voltar' }];
+  } else if (isHostInList(easOnlyDomains)) {
+    candidates = [{ type: 'easx' }];
+  } else if (isHostInList(linkvertiseAndSimilar)) {
+    candidates = [{ type: 'voltar' }, { type: 'easx' }, { type: 'ace' }];
+  } else {
+    // Default: Try Voltar first (highest success), then ACE, then EAS-X
+    candidates = [{ type: 'voltar' }, { type: 'ace' }, { type: 'easx' }];
+  }
 
   let chosen = null;
 
-  try {
-    for (const candidate of candidates) {
-      const apiStart = getCurrentTime();
+  for (const candidate of candidates) {
+    const apiStart = getCurrentTime();
 
-      if (candidate.type === 'easx') {
-        // EAS-X: POST JSON with required headers (no explicit timeout)
-        try {
-          const response = await axios.post(
-            EASX_API_URL,
-            { url },
-            { headers: {
-              'accept': 'application/json',
-              'eas-api-key': EASX_API_KEY,
-              'Content-Type': 'application/json'
-            } }
-          );
-          const measured = formatDuration(apiStart);
-          const parsed = tryParseJson(response.data) ?? response.data;
-          const minimal = normalizeToMinimal(parsed, measured);
-          if (minimal.status === null) minimal.status = (response.status >= 200 && response.status < 300) ? 'success' : 'error';
-          minimal.time_taken = minimal.time_taken ?? measured;
-          chosen = minimal;
-          if (minimal.status === 'success') break;
-          if (isHostInList(easOnlyDomains)) break;
-        } catch (err) {
-          const measured = formatDuration(apiStart);
-          let errMsg = 'An error occurred';
-          if (err.code === 'ECONNREFUSED') errMsg = 'Unable to connect to eas-x service';
-          else if (err.code === 'ETIMEDOUT') errMsg = 'Request timeout - service unavailable';
-          else if (err.response) {
-            const parsed = tryParseJson(err.response.data) ?? err.response.data;
-            errMsg = (parsed && (parsed.result || parsed.message || parsed.error)) || `Service error: ${err.response.status}`;
-          } else if (err.message) errMsg = err.message;
-          chosen = { status: 'error', result: errMsg, time_taken: measured };
-          if (isHostInList(easOnlyDomains)) break;
-        }
-      } else { // ACE
-        try {
-          const aceUrl = `${ACE_API_BASE}?url=${encodeURIComponent(url)}&apikey=${encodeURIComponent(ACE_API_KEY)}`;
-          const response = await axios.get(aceUrl); // intentionally no timeout set here either
-          const measured = formatDuration(apiStart);
-          const parsed = tryParseJson(response.data) ?? response.data;
-          const minimal = normalizeToMinimal(parsed, measured);
-          if (minimal.status === null) minimal.status = (response.status >= 200 && response.status < 300) ? 'success' : 'error';
-          minimal.time_taken = minimal.time_taken ?? measured;
-          chosen = minimal;
-          if (minimal.status === 'success') break;
-        } catch (err) {
-          const measured = formatDuration(apiStart);
-          let errMsg = 'An error occurred';
-          if (err.code === 'ECONNREFUSED') errMsg = 'Unable to connect to ACE bypass service';
-          else if (err.code === 'ETIMEDOUT') errMsg = 'Request timeout - ACE service unavailable';
-          else if (err.response) {
-            const parsed = tryParseJson(err.response.data) ?? err.response.data;
-            errMsg = (parsed && (parsed.result || parsed.message || parsed.error)) || `Service error: ${err.response.status}`;
-          } else if (err.message) errMsg = err.message;
-          chosen = { status: 'error', result: errMsg, time_taken: measured };
-        }
-      } // end candidate
-    } // end for
-  } catch (fatal) {
-    // Fallback catch-all so the function cannot crash
-    return res.status(500).json({
-      status: 'error',
-      result: (fatal && fatal.message) ? `Fatal: ${fatal.message}` : 'Fatal internal error',
-      time_taken: formatDuration(handlerStart)
-    });
+    try {
+      let response;
+
+      if (candidate.type === 'voltar') {
+        response = await axios.post(VOLTAR_API_URL, { url }, {
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': VOLTAR_API_KEY
+          }
+          // No timeout
+        });
+      } else if (candidate.type === 'easx') {
+        response = await axios.post(EASX_API_URL, { url }, {
+          headers: {
+            'accept': 'application/json',
+            'eas-api-key': EASX_API_KEY,
+            'Content-Type': 'application/json'
+          }
+          // No timeout
+        });
+      } else { // ace
+        const aceUrl = `${ACE_API_BASE}?url=${encodeURIComponent(url)}&apikey=${encodeURIComponent(ACE_API_KEY)}`;
+        response = await axios.get(aceUrl); // No timeout
+      }
+
+      const measured = formatDuration(apiStart);
+      const data = response.data;
+      const parsed = tryParseJson(data) ?? data;
+      const minimal = normalizeToMinimal(parsed, measured);
+
+      if (minimal.status === null) {
+        minimal.status = (response.status >= 200 && response.status < 300) ? 'success' : 'error';
+      }
+      minimal.time_taken = minimal.time_taken ?? measured;
+
+      chosen = minimal;
+      if (minimal.status === 'success') break;
+
+    } catch (err) {
+      const measured = formatDuration(apiStart);
+      let errMsg = 'Unknown error';
+
+      if (err.code === 'ECONNREFUSED') errMsg = 'Service refused connection';
+      else if (err.code === 'ENOTFOUND') errMsg = 'Service not found';
+      else if (err.response) {
+        const data = tryParseJson(err.response.data) ?? err.response.data;
+        errMsg = data?.message || data?.error || data?.result || `HTTP ${err.response.status}`;
+      } else if (err.message) {
+        errMsg = err.message;
+      }
+
+      chosen = {
+        status: 'error',
+        result: `${candidate.type.toUpperCase()}: ${errMsg}`,
+        time_taken: measured
+      };
+
+      // Do NOT fallback if it's a Voltar-only domain
+      if (candidate.type === 'voltar' && isHostInList(voltarOnlyDomains)) {
+        break;
+      }
+    }
   }
 
-  // If no chosen, return fallback
+  // Final fallback if nothing worked
   if (!chosen) {
     return res.status(200).json({
       status: 'error',
-      result: 'No upstream attempts made',
+      result: 'All bypass services failed',
       time_taken: formatDuration(handlerStart)
     });
   }
