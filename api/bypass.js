@@ -1,11 +1,10 @@
-// /api/bypass.js
 const getCurrentTime = () => process.hrtime.bigint();
 
 const formatDuration = (startNs, endNs = process.hrtime.bigint()) => {
   const durationNs = Number(endNs - startNs);
   const durationMs = durationNs / 1_000_000;
   const durationSec = durationMs / 1000;
-  return `${durationSec.toFixed(2)}s`; // 1.00s format as requested
+  return `${durationSec.toFixed(2)}s`;
 };
 
 const tryParseJson = (v) => {
@@ -22,11 +21,11 @@ const isUnsupported = (msg) => {
 module.exports = async (req, res) => {
   const handlerStart = getCurrentTime();
 
-  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   if (!['GET', 'POST'].includes(req.method)) {
@@ -38,6 +37,7 @@ module.exports = async (req, res) => {
   }
 
   const url = req.method === 'GET' ? req.query.url : req.body?.url;
+
   if (!url || typeof url !== 'string') {
     return res.status(400).json({
       status: 'error',
@@ -57,18 +57,18 @@ module.exports = async (req, res) => {
     });
   }
 
-  // === CONFIG ===
   const configs = {
     voltar: {
       url: 'http://77.110.121.76:3000/bypass',
-      key: '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa',
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa'
+      },
       body: { url }
     },
     easx: {
       url: 'https://api.eas-x.com/v3/bypass',
-      key: process.env.EASX_API_KEY || '.john2032-3253f-3262k-3631f-2626j-9078k',
       method: 'POST',
       headers: {
         'accept': 'application/json',
@@ -83,43 +83,32 @@ module.exports = async (req, res) => {
     }
   };
 
-  // === DOMAIN LISTS ===
-  const voltarOnly = ['key.valex.io', 'auth.platoboost', 'work.ink', 'link4m.com', 'keyrblx.com', 'link4sub.com', 'linkify.ru', 'sub4unlock.io', 'sub2unlock'];
-  const easOnly = ['rentry.org', 'paster.so', 'loot-link.com', 'loot-links.com', 'lootlink.org', 'lootlinks.co', 'lootdest.info', 'lootdest.org', 'lootdest.com', 'links-loot.com', 'linksloot.net'];
-  const linkvertise = ['linkvertise.com', 'link-target.net', 'link-center.net', 'link-to.net'];
+  const voltarOnly = ['key.valex.io','auth.platoboost','work.ink','link4m.com','keyrblx.com','link4sub.com','linkify.ru','sub4unlock.io','sub2unlock'];
+  const easOnly = ['rentry.org','paster.so','loot-link.com','loot-links.com','lootlink.org','lootlinks.co','lootdest.info','lootdest.org','lootdest.com','links-loot.com','linksloot.net'];
+  const linkvertise = ['linkvertise.com','link-target.net','link-center.net','link-to.net'];
 
-  // === Extract hostname safely ===
   let hostname = '';
   try {
     hostname = new URL(url).hostname.toLowerCase();
   } catch {
-    const match = url.match(/https?:\/\/([^\/\?]+)/i);
-    hostname = match ? match[1].toLowerCase() : '';
+    const m = url.match(/https?:\/\/([^\/?#]+)/i);
+    hostname = m ? m[1].toLowerCase() : '';
   }
 
   const hasDomain = (list) => list.some(d => hostname === d || hostname.endsWith('.' + d));
 
-  // === Decide API priority order ===
   let apiOrder = [];
+  if (hasDomain(voltarOnly)) apiOrder = ['voltar'];
+  else if (hasDomain(easOnly)) apiOrder = ['easx'];
+  else if (hasDomain(linkvertise)) apiOrder = ['voltar','easx','ace'];
+  else apiOrder = ['voltar','ace','easx'];
 
-  if (hasDomain(voltarOnly)) {
-    apiOrder = ['voltar'];                    // Only Voltar → no fallback
-  } else if (hasDomain(easOnly)) {
-    apiOrder = ['easx'];                      // Only EAS-X → no fallback
-  } else if (hasDomain(linkvertise)) {
-    apiOrder = ['voltar', 'easx', 'ace'];     // Best chance first
-  } else {
-    apiOrder = ['voltar', 'ace', 'easx'];     // Default strong order
-  }
-
-  // === Try each API in order ===
   for (const apiName of apiOrder) {
     const apiStart = getCurrentTime();
     const config = configs[apiName];
 
     try {
       let response;
-
       if (config.method === 'POST') {
         response = await axios.post(config.url, config.body, { headers: config.headers });
       } else {
@@ -129,9 +118,8 @@ module.exports = async (req, res) => {
       const timeTaken = formatDuration(apiStart);
       const data = response.data;
 
-      // Success detection
-      if (data && (data.result || data.destination || data.url || data.link)) {
-        const finalLink = data.result || data.destination || data.url || data.link;
+      const finalLink = data?.result || data?.destination || data?.url || data?.link || data?.data;
+      if (finalLink) {
         return res.json({
           status: 'success',
           result: finalLink,
@@ -139,35 +127,27 @@ module.exports = async (req, res) => {
         });
       }
 
-      // Explicit unsupported from API
       if (isUnsupported(data?.message || data?.error || data?.result)) {
         throw new Error('unsupported');
       }
-
     } catch (err) {
-      // Do NOT continue if this was a forced single-API domain
       if (
         (apiName === 'voltar' && hasDomain(voltarOnly)) ||
         (apiName === 'easx' && hasDomain(easOnly))
       ) {
-        const timeTaken = formatDuration(apiStart);
         return res.json({
           status: 'error',
           result: 'Link Not Supported Rip',
-          time_taken
+          time_taken: formatDuration(apiStart)
         });
       }
-
-      // Otherwise: continue to next API (fallback)
       continue;
     }
   }
 
-  // All APIs failed or unsupported
-  const totalTime = formatDuration(handlerStart);
   return res.json({
     status: 'error',
     result: 'Bypass Failed :(',
-    time_taken: totalTime
+    time_taken: formatDuration(handlerStart)
   });
 };
