@@ -1,61 +1,32 @@
 // /api/bypass.js
 const getCurrentTime = () => process.hrtime.bigint();
 
-// Changed: toFixed(2) instead of toFixed(3) → 1.00s instead of 1.000s
 const formatDuration = (startNs, endNs = process.hrtime.bigint()) => {
   const durationNs = Number(endNs - startNs);
   const durationMs = durationNs / 1_000_000;
   const durationSec = durationMs / 1000;
-  return `${durationSec.toFixed(2)}s`;  // ← Now 2 decimal places
+  return `${durationSec.toFixed(2)}s`; // 1.00s format as requested
 };
 
 const tryParseJson = (v) => {
   if (!v) return null;
   if (typeof v === 'object') return v;
-  try { return JSON.parse(v); } catch (e) { return null; }
-};
-
-const normalizeToMinimal = (raw, measuredTime) => {
-  const obj = (typeof raw === 'object') ? raw : tryParseJson(raw);
-
-  let result = obj?.result ?? obj?.message ?? obj?.error ?? obj?.data ?? null;
-  let status = null;
-
-  if (obj && typeof obj.status === 'string') {
-    status = obj.status.toLowerCase() === 'success' ? 'success' : 'error';
-  } else if (obj && (obj.status || obj.statusCode)) {
-    const code = obj.status ?? obj.statusCode;
-    status = (code >= 200 && code < 300) ? 'success' : 'error';
-  } else {
-    status = null;
-  }
-
-  // Also ensure any incoming time_taken uses 2 decimals
-  let timeTaken = obj?.time_taken ?? obj?.time ?? measuredTime;
-  if (typeof timeTaken === 'number') {
-    timeTaken = `${timeTaken.toFixed(2)}s`;
-  }
-  if (!timeTaken || timeTaken === '0.00s' || timeTaken === '0s') {
-    timeTaken = measuredTime;
-  }
-
-  return { status, result, time_taken: timeTaken };
+  try { return JSON.parse(v); } catch { return null; }
 };
 
 const isUnsupported = (msg) => {
   if (!msg) return false;
-  const lower = msg.toString().toLowerCase();
-  return /unsupported|not supported|not support/i.test(lower);
+  return /unsupported|not supported|not support/i.test(String(msg).toLowerCase());
 };
 
 module.exports = async (req, res) => {
   const handlerStart = getCurrentTime();
 
+  // CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   if (!['GET', 'POST'].includes(req.method)) {
@@ -66,146 +37,137 @@ module.exports = async (req, res) => {
     });
   }
 
-  const url = (req.method === 'GET' ? req.query.url : (req.body && req.body.url)) || null;
-  if (!url) {
+  const url = req.method === 'GET' ? req.query.url : req.body?.url;
+  if (!url || typeof url !== 'string') {
     return res.status(400).json({
       status: 'error',
-      result: 'URL parameter is required',
+      result: 'Missing or invalid url parameter',
       time_taken: formatDuration(handlerStart)
     });
   }
-
-  // Fixed missing closing brace
 
   let axios;
   try {
     axios = require('axios');
-  } catch (e) {
+  } catch {
     return res.status(500).json({
       status: 'error',
-      result: 'Missing dependency: axios',
+      result: 'Server error: axios not installed',
       time_taken: formatDuration(handlerStart)
     });
   }
 
-  // === API CONFIG ===
-  const EASX_API_URL = 'https://api.eas-x.com/v3/bypass';
-  const EASX_API_KEY = process.env.EASX_API_KEY || '.john2032-3253f-3262k-3631f-2626j-9078k';
-
-  const ACE_API_BASE = process.env.ACE_API_BASE || 'https://ace-bypass.com/api/bypass';
-  const ACE_API_KEY = process.env.ACE_API_KEY || 'FREE_S7MdXC0momgajOEx1_UKW7FQUvbmzvalu0gTwr-V6cI';
-
-  const VOLTAR_API_URL = 'http://77.110.121.76:3000/bypass';
-  const VOLTAR_API_KEY = '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa';
+  // === CONFIG ===
+  const configs = {
+    voltar: {
+      url: 'http://77.110.121.76:3000/bypass',
+      key: '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa' },
+      body: { url }
+    },
+    easx: {
+      url: 'https://api.eas-x.com/v3/bypass',
+      key: process.env.EASX_API_KEY || '.john2032-3253f-3262k-3631f-2626j-9078k',
+      method: 'POST',
+      headers: {
+        'accept': 'application/json',
+        'eas-api-key': process.env.EASX_API_KEY || '.john2032-3253f-3262k-3631f-2626j-9078k',
+        'Content-Type': 'application/json'
+      },
+      body: { url }
+    },
+    ace: {
+      url: `https://ace-bypass.com/api/bypass?url=${encodeURIComponent(url)}&apikey=${process.env.ACE_API_KEY || 'FREE_S7MdXC0momgajOEx1_UKW7FQUvbmzvalu0gTwr-V6cI'}`,
+      method: 'GET'
+    }
+  };
 
   // === DOMAIN LISTS ===
-  const voltarOnlyDomains = [
-    'key.valex.io', 'auth.platoboost', 'work.ink', 'link4m.com',
-    'keyrblx.com', 'link4sub.com', 'linkify.ru', 'sub4unlock.io', 'sub2unlock'
-  ].map(d => d.toLowerCase());
+  const voltarOnly = ['key.valex.io', 'auth.platoboost', 'work.ink', 'link4m.com', 'keyrblx.com', 'link4sub.com', 'linkify.ru', 'sub4unlock.io', 'sub2unlock'];
+  const easOnly = ['rentry.org', 'paster.so', 'loot-link.com', 'loot-links.com', 'lootlink.org', 'lootlinks.co', 'lootdest.info', 'lootdest.org', 'lootdest.com', 'links-loot.com', 'linksloot.net'];
+  const linkvertise = ['linkvertise.com', 'link-target.net', 'link-center.net', 'link-to.net'];
 
-  const easOnlyDomains = [
-    'rentry.org', 'paster.so', 'loot-link.com', 'loot-links.com', 'lootlink.org',
-    'lootlinks.co', 'lootdest.info', 'lootdest.org', 'lootdest.com', 'links-loot.com', 'linksloot.net'
-  ].map(d => d.toLowerCase());
-
-  const linkvertiseDomains = [
-    'linkvertise.com', 'link-target.net', 'link-center.net', 'link-to.net'
-  ].map(d => d.toLowerCase());
-
-  // === Get hostname ===
+  // === Extract hostname safely ===
   let hostname = '';
   try {
     hostname = new URL(url).hostname.toLowerCase();
-  } catch (e) {
-    const match = url.match(/https?:\/\/([^\/]+)/i);
+  } catch {
+    const match = url.match(/https?:\/\/([^\/\?]+)/i);
     hostname = match ? match[1].toLowerCase() : '';
   }
 
-  const isHostInList = (list) => list.some(d => hostname === d || hostname.endsWith('.' + d));
+  const hasDomain = (list) => list.some(d => hostname === d || hostname.endsWith('.' + d));
 
-  // === Decide API order ===
-  let candidates = [];
+  // === Decide API priority order ===
+  let apiOrder = [];
 
-  if (isHostInList(voltarOnlyDomains)) {
-    candidates = [{ type: 'voltar' }];
-  } else if (isHostInList(easOnlyDomains)) {
-    candidates = [{ type: 'easx' }];
-  } else if (isHostInList(linkvertiseDomains)) {
-    candidates = [{ type: 'voltar' }, { type: 'easx' }, { type: 'ace' }];
+  if (hasDomain(voltarOnly)) {
+    apiOrder = ['voltar'];                    // Only Voltar → no fallback
+  } else if (hasDomain(easOnly)) {
+    apiOrder = ['easx'];                      // Only EAS-X → no fallback
+  } else if (hasDomain(linkvertise)) {
+    apiOrder = ['voltar', 'easx', 'ace'];     // Best chance first
   } else {
-    candidates = [{ type: 'voltar' }, { type: 'ace' }, { type: 'easx' }];
+    apiOrder = ['voltar', 'ace', 'easx'];     // Default strong order
   }
 
-  let result = null;
-
-  for (const candidate of candidates) {
+  // === Try each API in order ===
+  for (const apiName of apiOrder) {
     const apiStart = getCurrentTime();
+    const config = configs[apiName];
 
     try {
       let response;
 
-      if (candidate.type === 'voltar') {
-        response = await axios.post(VOLTAR_API_URL, { url }, {
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': VOLTAR_API_KEY
-          }
-        });
-      } else if (candidate.type === 'easx') {
-        response = await axios.post(EASX_API_URL, { url }, {
-          headers: {
-            'accept': 'application/json',
-            'eas-api-key': EASX_API_KEY,
-            'Content-Type': 'application/json'
-          }
-        });
-      } else { // ace
-        const aceUrl = `${ACE_API_BASE}?url=${encodeURIComponent(url)}&apikey=${ACE_API_KEY}`;
-        response = await axios.get(aceUrl);
-      }
-
-      const measured = formatDuration(apiStart);
-      const { status, result: apiResult } = normalizeToMinimal(response.data, measured);
-
-      if (status === 'success' && apiResult) {
-        return res.status(200).json({
-          status: 'success',
-          result: apiResult,
-          time_taken: measured
-        });
-      }
-
-      if (apiResult && isUnsupported(apiResult)) {
-        result = { status: 'error', result: 'Link Not Supported Rip', time_taken: measured };
+      if (config.method === 'POST') {
+        response = await axios.post(config.url, config.body, { headers: config.headers });
       } else {
-        result = { status: 'error', result: 'Bypass Failed :(', time_taken: measured };
+        response = await axios.get(config.url);
       }
 
-      if (candidate.type === 'voltar' && isHostInList(voltarOnlyDomains)) break;
+      const timeTaken = formatDuration(apiStart);
+      const data = response.data;
+
+      // Success detection
+      if (data && (data.result || data.destination || data.url || data.link)) {
+        const finalLink = data.result || data.destination || data.url || data.link;
+        return res.json({
+          status: 'success',
+          result: finalLink,
+          time_taken: timeTaken
+        });
+      }
+
+      // Explicit unsupported from API
+      if (isUnsupported(data?.message || data?.error || data?.result)) {
+        throw new Error('unsupported');
+      }
 
     } catch (err) {
-      const measured = formatDuration(apiStart);
-      let errorMsg = 'Bypass Failed :(';
-
-      if (err.response) {
-        const data = tryParseJson(err.response.data);
-        const msg = data?.message || data?.error || data?.result || '';
-        if (isUnsupported(msg)) {
-          errorMsg = 'Link Not Supported Rip';
-        }
+      // Do NOT continue if this was a forced single-API domain
+      if (
+        (apiName === 'voltar' && hasDomain(voltarOnly)) ||
+        (apiName === 'easx' && hasDomain(easOnly))
+      ) {
+        const timeTaken = formatDuration(apiStart);
+        return res.json({
+          status: 'error',
+          result: 'Link Not Supported Rip',
+          time_taken
+        });
       }
 
-      result = { status: 'error', result: errorMsg, time_taken: measured };
-
-      if (candidate.type === 'voltar' && isHostInList(voltarOnlyDomains)) break;
+      // Otherwise: continue to next API (fallback)
+      continue;
     }
   }
 
-  // Final fallback response
-  return res.status(200).json({
-    status: result?.status || 'error',
-    result: result?.result || 'Bypass Failed :(',
-    time_taken: result?.time_taken || formatDuration(handlerStart)
+  // All APIs failed or unsupported
+  const totalTime = formatDuration(handlerStart);
+  return res.json({
+    status: 'error',
+    result: 'Bypass Failed :(',
+    time_taken: totalTime
   });
 };
