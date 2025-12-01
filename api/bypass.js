@@ -80,29 +80,29 @@ module.exports = async (req, res) => {
         res.json({status:'success',result:link,time_taken:time});
         return true;
       }
-      if (/unsupported|not supported/i.test(String(d?.message || d?.error || d?.result || ''))) {
+      if (/unsupported|not supported|missing_url/i.test(String(d?.message || d?.error || d?.result || ''))) {
         return 'unsupported';
       }
     } catch (e) {
       formatDuration(start);
       if (e.response?.data) {
         const msg = e.response.data?.message || e.response.data?.error || e.response.data?.result || '';
-        if (/unsupported|not supported/i.test(String(msg))) return 'unsupported';
+        if (/unsupported|not supported|missing_url/i.test(String(msg))) return 'unsupported';
       }
     }
     return false;
   };
 
-  if (isVoltarOnly) {
+  if (isVoltarOnly || hostname === 'work.ink' || hostname.endsWith('.work.ink')) {
     const r = await tryApi(voltarConfig);
     if (r === true) return;
-    return res.json({status:'error',result:'Link Not Supported Rip',time_taken:formatDuration(handlerStart)});
+    return res.json({status:'error',result:'Bypass Failed :(',time_taken:formatDuration(handlerStart)});
   }
 
   if (isEasOnly) {
     const r = await tryApi(easConfig);
     if (r === true) return;
-    return res.json({status:'error',result:'Link Not Supported Rip',time_taken:formatDuration(handlerStart)});
+    return res.json({status:'error',result:'Bypass Failed :(',time_taken:formatDuration(handlerStart)});
   }
 
   const order = hostname.includes('linkvertise') || hostname.includes('link-to.net') || hostname.includes('link-target.net') || hostname.includes('link-center.net')
