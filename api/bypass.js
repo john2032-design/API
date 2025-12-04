@@ -38,14 +38,10 @@ module.exports = async (req, res) => {
   const isVoltarOnly = voltarOnly.some(d => hostname === d || hostname.endsWith('.'+d));
   const isEasOnly = easOnly.some(d => hostname === d || hostname.endsWith('.'+d));
   const voltarBase = 'http://77.110.121.76:3000';
-  const voltarConfig = {
-    createTaskUrl: `${voltarBase}/bypass/createTask`,
-    getResultUrl: (taskId) => `${voltarBase}/bypass/getTaskResult/${taskId}`,
-    headers: {
-      'x-user-id': '',
-      'x-api-key': '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa',
-      'Content-Type': 'application/json'
-    }
+  const voltarHeaders = {
+    'x-user-id': '',
+    'x-api-key': '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa',
+    'Content-Type': 'application/json'
   };
   const easConfig = {
     method: 'POST',
@@ -64,13 +60,13 @@ module.exports = async (req, res) => {
   const tryVoltar = async () => {
     const start = getCurrentTime();
     try {
-      const createRes = await axios.post(voltarConfig.createTaskUrl,{url,cache:true},{headers:voltarConfig.headers});
+      const createRes = await axios.post(`${voltarBase}/bypass/createTask`,{url,cache:true},{headers:voltarHeaders});
       if (createRes.data.status !== 'success' || !createRes.data.taskId) return 'unsupported';
       const taskId = createRes.data.taskId;
       for (let i = 0; i < 140; i++) {
         await new Promise(r => setTimeout(r, 1000));
         try {
-          const resultRes = await axios.get(voltarConfig.getResultUrl(taskId),{headers:{'x-api-key':voltarConfig.headers['x-api-key']}});
+          const resultRes = await axios.get(`${voltarBase}/bypass/getTaskResult/${taskId}`,{headers:{'x-api-key':voltarHeaders['x-api-key']}});
           if (resultRes.data.status === 'success' && resultRes.data.result) {
             res.json({status:'success',result:resultRes.data.result,time_taken:formatDuration(start)});
             return true;
@@ -112,19 +108,11 @@ module.exports = async (req, res) => {
     if (r === true) return;
     return res.json({status:'error',result:'Bypass Failed :(',time_taken:formatDuration(handlerStart)});
   }
-  const order = hostname.includes('linkvertise') || hostname.includes('link-to.net') || hostname.includes('link-target.net') || hostname.includes('link-center.net')
-    ? [voltarConfig, easConfig, aceConfig]
-    : [voltarConfig, aceConfig, easConfig];
-  for (const cfg of order) {
-    if (cfg.createTaskUrl) {
-      const r = await tryVoltar();
-      if (r === true) return;
-      if (r === 'unsupported') continue;
-    } else {
-      const r = await tryApi(cfg);
-      if (r === true) return;
-      if (r === 'unsupported') continue;
-    }
-  }
+  const voltarFirst = await tryVoltar();
+  if (voltarFirst === true) return;
+  const aceResult = await tryApi(aceConfig);
+  if (aceResult === true) return;
+  const easResult = await tryApi(easConfig);
+  if (easResult === true) return;
   res.json({status:'error',result:'Bypass Failed :(',time_taken:formatDuration(handlerStart)});
 };
