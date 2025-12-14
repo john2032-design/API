@@ -33,7 +33,7 @@ module.exports = async (req, res) => {
   if (!hostname) {
     return res.status(400).json({status:'error',result:'Invalid URL',time_taken:formatDuration(handlerStart)});
   }
-  const voltarOnly = ['key.valex.io','auth.platoboost','work.ink','link4m.com','keyrblx.com','link4sub.com','linkify.ru','sub4unlock.io','sub2unlock','sub2get.com','sub2unlock.net'];
+  const voltarOnly = ['key.valex.io','auth.plato','work.ink','link4m.com','keyrblx.com','link4sub.com','linkify.ru','sub4unlock.io','sub2unlock','sub2get.com','sub2unlock.net'];
   const easOnly = ['rentry.org','paster.so','loot-link.com','loot-links.com','lootlink.org','lootlinks.co','lootdest.info','lootdest.org','lootdest.com','links-loot.com','linksloot.net','rekonise.com'];
   const isVoltarOnly = voltarOnly.some(d => hostname === d || hostname.endsWith('.'+d));
   const isEasOnly = easOnly.some(d => hostname === d || hostname.endsWith('.'+d));
