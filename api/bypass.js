@@ -4,7 +4,6 @@ const formatDuration = (startNs, endNs = process.hrtime.bigint()) => {
   const durationSec = durationNs / 1_000_000_000;
   return `${durationSec.toFixed(2)}s`;
 };
-
 module.exports = async (req, res) => {
   const handlerStart = getCurrentTime();
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -33,90 +32,58 @@ module.exports = async (req, res) => {
   if (!hostname) {
     return res.status(400).json({status:'error',result:'Invalid URL',time_taken:formatDuration(handlerStart)});
   }
-
-  const handlePasteTo = async () => {
+  const tryPasteTo = async (rawUrl) => {
     const start = getCurrentTime();
     try {
-      let parsed;
+      const parts = rawUrl.split('#');
+      const fragment = parts[1] || '';
+      const base = parts[0];
+      let urlObj;
       try {
-        parsed = new URL(url);
+        urlObj = new URL(base);
       } catch {
-        return {status:'error',result:'Invalid paste.to URL',time_taken:formatDuration(start)};
+        return { ok:false, reason:'Invalid paste.to URL' };
       }
-      let pasteId = '';
-      if (parsed.pathname && parsed.pathname !== '/') pasteId = parsed.pathname.slice(1);
-      if (!pasteId && parsed.search) {
-        const s = parsed.search.slice(1);
-        if (s) pasteId = s.split('&')[0];
-      }
-      const key = parsed.hash ? parsed.hash.slice(1) : '';
-      if (!pasteId) return {status:'error',result:'Missing paste id in URL',time_taken:formatDuration(start)};
-      const pasteUrl = `https://paste.to/?${encodeURIComponent(pasteId)}`;
-      const getRes = await axios.get(pasteUrl, {headers:{'Accept':'application/json','User-Agent':'bypass-api-proxy/1.0'} , timeout: 15000});
-      const data = getRes.data;
-      if (!data) return {status:'error',result:'No data returned from paste.to',time_taken:formatDuration(start)};
-      if (!key) {
-        return {status:'error',result:'Missing decryption key in URL fragment (after #). Include the full paste.to link with fragment.',time_taken:formatDuration(start)};
-      }
-      let pb;
+      const id = urlObj.search ? urlObj.search.slice(1) : (urlObj.pathname && urlObj.pathname !== '/' ? urlObj.pathname.replace(/^\//,'') : '');
+      const key = fragment;
+      if (!id || !key) return { ok:false, reason:'Missing paste id or key. Ensure the fragment (after #) is included in the URL parameter' };
+      const fetchUrl = `${urlObj.origin}/?${id}`;
+      let r;
       try {
-        pb = require('privatebin-decrypt');
+        r = await axios.get(fetchUrl, { headers: { Accept: 'application/json, text/javascript, */*; q=0.01' }, responseType: 'json', timeout: 15000 });
       } catch (e) {
-        return {status:'error',result:'privatebin-decrypt missing. Install dependency "privatebin-decrypt" in package.json',time_taken:formatDuration(start)};
+        return { ok:false, reason:'Failed to fetch paste data' };
       }
-      let plaintext = null;
+      const data = r.data;
+      if (!data || (!data.ct && !data.adata)) return { ok:false, reason:'Paste data missing ct/adata' };
+      let decryptPrivateBin;
       try {
-        if (typeof pb.decrypt === 'function') {
-          try {
-            plaintext = await pb.decrypt(data, key);
-          } catch (e1) {
-            try {
-              plaintext = await pb.decrypt(data.ct || data.ciphertext || data.data || '', key, data.adata || data.ad || data.salt || '');
-            } catch (e2) {
-              throw e2;
-            }
-          }
-        } else if (typeof pb === 'function') {
-          try {
-            plaintext = await pb(data, key);
-          } catch (e1) {
-            throw e1;
-          }
-        } else {
-          throw new Error('privatebin-decrypt export not recognized');
+        const maybe = require('privatebin-decrypt');
+        decryptPrivateBin = maybe.decryptPrivateBin || maybe.default || maybe;
+      } catch (e) {
+        try {
+          const imported = await import('privatebin-decrypt');
+          decryptPrivateBin = imported.decryptPrivateBin || imported.default || imported;
+        } catch (e2) {
+          return { ok:false, reason:'privatebin-decrypt missing' };
         }
-      } catch (errDecrypt) {
-        return {status:'error',result:`Decryption failed: ${String(errDecrypt.message || errDecrypt)}`,time_taken:formatDuration(start)};
       }
-      if (plaintext == null) return {status:'error',result:'Decryption returned empty result',time_taken:formatDuration(start)};
-      let output = plaintext;
+      if (!decryptPrivateBin || typeof decryptPrivateBin !== 'function') {
+        if (decryptPrivateBin && typeof decryptPrivateBin.decryptPrivateBin === 'function') decryptPrivateBin = decryptPrivateBin.decryptPrivateBin;
+      }
+      if (!decryptPrivateBin || typeof decryptPrivateBin !== 'function') return { ok:false, reason:'privatebin-decrypt export not recognized' };
+      let decrypted;
       try {
-        const parsedPlain = typeof plaintext === 'string' ? JSON.parse(plaintext) : plaintext;
-        if (parsedPlain && parsedPlain.content) {
-          if (Array.isArray(parsedPlain.content.text)) {
-            output = parsedPlain.content.text.join('\n');
-          } else if (typeof parsedPlain.content === 'string') {
-            output = parsedPlain.content;
-          } else {
-            output = JSON.stringify(parsedPlain);
-          }
-        }
-      } catch {}
-      return {status:'success',result:output,time_taken:formatDuration(start)};
+        decrypted = await decryptPrivateBin({ key, data: data.adata, cipherMessage: data.ct });
+      } catch (e) {
+        const msg = String(e?.message || e || '');
+        return { ok:false, reason:`Decryption failed: ${msg}` };
+      }
+      return { ok:true, result:decrypted, time_taken:formatDuration(start) };
     } catch (e) {
-      return {status:'error',result:`paste.to handler error: ${String(e.message || e)}`,time_taken:formatDuration(start)};
+      return { ok:false, reason:'Unexpected error in paste.to handling' };
     }
   };
-
-  if (hostname === 'paste.to' || hostname.endsWith('.paste.to')) {
-    const r = await handlePasteTo();
-    if (r.status === 'success') {
-      return res.json(r);
-    } else {
-      return res.status(400).json(r);
-    }
-  }
-
   const voltarOnly = ['key.valex.io','auth.plato','work.ink','link4m.com','keyrblx.com','link4sub.com','linkify.ru','sub4unlock.io','sub2unlock','sub2get.com','sub2unlock.net'];
   const easOnly = ['rentry.org','paster.so','loot-link.com','loot-links.com','lootlink.org','lootlinks.co','lootdest.info','lootdest.org','lootdest.com','links-loot.com','linksloot.net','rekonise.com'];
   const isVoltarOnly = voltarOnly.some(d => hostname === d || hostname.endsWith('.'+d));
@@ -182,6 +149,11 @@ module.exports = async (req, res) => {
     }
     return false;
   };
+  if (hostname === 'paste.to' || hostname.endsWith('.paste.to')) {
+    const r = await tryPasteTo(url);
+    if (r.ok) return res.json({status:'success',result:r.result,time_taken:r.time_taken});
+    return res.json({status:'error',result:r.reason || 'Paste.to handling failed',time_taken:formatDuration(handlerStart)});
+  }
   if (isVoltarOnly || hostname === 'work.ink' || hostname.endsWith('.work.ink')) {
     const r = await tryVoltar();
     if (r === true) return;
