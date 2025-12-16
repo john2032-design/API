@@ -1,8 +1,8 @@
 {
   "name": "bypass-api-proxy",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Proxy for bypass API - Vercel compatible",
-  "main": "api/index.js",
+  "main": "api/bypass.js",
   "scripts": {
     "dev": "vercel dev"
   },
