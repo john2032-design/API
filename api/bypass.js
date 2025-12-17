@@ -241,48 +241,43 @@ module.exports = async (req, res) => {
     try {
       let parsedUrl;
       try { parsedUrl = new URL(url); } catch { parsedUrl = null; }
-      const path = parsedUrl ? (parsedUrl.pathname.substring(1) + (parsedUrl.search || '')) : url;
+      const path = parsedUrl ? parsedUrl.pathname.substring(1) : url;
       const apiGet = await axios.get(`https://bstlar.com/api/link?url=${encodeURIComponent(path)}`, {
         headers: {
-          'accept': 'application/json, text/plain, */*',
-          'accept-language': 'en-US,en;q=0.9',
-          'authorization': 'null',
-          'Referer': url,
-          'Referrer-Policy': 'same-origin'
+          "accept": "application/json, text/plain, */*",
+          "accept-language": "en-US,en;q=0.9",
+          "authorization": "null",
+          "Referer": url,
+          "Referrer-Policy": "same-origin"
         },
         timeout: 15000
       });
       const data = apiGet.data;
-      if (!data || !data.tasks || !Array.isArray(data.tasks) || data.tasks.length === 0) {
-        return 'no-tasks';
+      if (!(data && data.tasks && Array.isArray(data.tasks) && data.tasks.length > 0)) {
+        throw new Error("No tasks found in response!");
       }
       const linkId = data.tasks[0].link_id;
-      if (!linkId) return false;
-      const apiPost = await axios.post('https://bstlar.com/api/link-completed', { link_id: linkId }, {
+      const apiPost = await axios.post("https://bstlar.com/api/link-completed", { link_id: linkId }, {
         headers: {
-          'accept': 'application/json, text/plain, */*',
-          'content-type': 'application/json;charset=UTF-8',
-          'authorization': 'null',
-          'Referer': url,
-          'Referrer-Policy': 'same-origin'
+          "accept": "application/json, text/plain, */*",
+          "content-type": "application/json;charset=UTF-8",
+          "authorization": "null",
+          "Referer": url,
+          "Referrer-Policy": "same-origin"
         },
-        timeout: 15000
+        timeout: 15000,
+        responseType: "text"
       });
-      let final = apiPost.data;
-      if (typeof final === 'object') {
-        final = final?.result || final?.link || final?.url || final?.destination || JSON.stringify(final);
-      } else {
-        final = String(final || '');
-      }
-      if (final) {
-        res.json({ status: 'success', result: final, time_taken: formatDuration(start) });
-        return true;
-      }
-      return false;
+      let finalLink = apiPost.data;
+      if (typeof finalLink === 'object') finalLink = finalLink?.result || finalLink?.link || finalLink?.url || finalLink?.destination || JSON.stringify(finalLink);
+      finalLink = String(finalLink || '');
+      if (finalLink.length === 0) return false;
+      res.json({ status: 'success', result: finalLink, time_taken: formatDuration(start) });
+      return true;
     } catch (e) {
       if (e.response?.status === 404) return 'unsupported';
-      const msg = e.response?.data?.message || e.response?.data?.error || '';
-      if (msg && /unsupported|not supported|missing_url/i.test(String(msg))) return 'unsupported';
+      const msg = e.response?.data?.message || e.response?.data?.error || e.message || '';
+      if (String(msg).match(/unsupported|not supported|missing_url/i)) return 'unsupported';
       return false;
     }
   };
