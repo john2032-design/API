@@ -236,6 +236,56 @@ module.exports = async (req, res) => {
       return { status: 'error', result: `Overdrive handling exception: ${String(e.message || e)}`, time_taken: formatDuration(start) };
     }
   };
+  const tryBstlar = async () => {
+    const start = getCurrentTime();
+    try {
+      let parsedUrl;
+      try { parsedUrl = new URL(url); } catch { parsedUrl = null; }
+      const path = parsedUrl ? (parsedUrl.pathname.substring(1) + (parsedUrl.search || '')) : url;
+      const apiGet = await axios.get(`https://bstlar.com/api/link?url=${encodeURIComponent(path)}`, {
+        headers: {
+          'accept': 'application/json, text/plain, */*',
+          'accept-language': 'en-US,en;q=0.9',
+          'authorization': 'null',
+          'Referer': url,
+          'Referrer-Policy': 'same-origin'
+        },
+        timeout: 15000
+      });
+      const data = apiGet.data;
+      if (!data || !data.tasks || !Array.isArray(data.tasks) || data.tasks.length === 0) {
+        return 'no-tasks';
+      }
+      const linkId = data.tasks[0].link_id;
+      if (!linkId) return false;
+      const apiPost = await axios.post('https://bstlar.com/api/link-completed', { link_id: linkId }, {
+        headers: {
+          'accept': 'application/json, text/plain, */*',
+          'content-type': 'application/json;charset=UTF-8',
+          'authorization': 'null',
+          'Referer': url,
+          'Referrer-Policy': 'same-origin'
+        },
+        timeout: 15000
+      });
+      let final = apiPost.data;
+      if (typeof final === 'object') {
+        final = final?.result || final?.link || final?.url || final?.destination || JSON.stringify(final);
+      } else {
+        final = String(final || '');
+      }
+      if (final) {
+        res.json({ status: 'success', result: final, time_taken: formatDuration(start) });
+        return true;
+      }
+      return false;
+    } catch (e) {
+      if (e.response?.status === 404) return 'unsupported';
+      const msg = e.response?.data?.message || e.response?.data?.error || '';
+      if (msg && /unsupported|not supported|missing_url/i.test(String(msg))) return 'unsupported';
+      return false;
+    }
+  };
   if (hostname === 'paste.to' || hostname.endsWith('.paste.to')) {
     const start = getCurrentTime();
     try {
@@ -283,6 +333,11 @@ module.exports = async (req, res) => {
     if (r && r.status === 'success') return res.json(r);
     if (r && r.status === 'error') return res.status(500).json(r);
     return res.status(500).json({ status: 'error', result: 'Overdrive bypass failed', time_taken: formatDuration(handlerStart) });
+  }
+  if (hostname === 'bstlar.com' || hostname.endsWith('.bstlar.com')) {
+    const r = await tryBstlar();
+    if (r === true) return;
+    return res.json({ status: 'error', result: 'Bypass Failed :(', time_taken: formatDuration(handlerStart) });
   }
   if (isVoltarOnly || hostname === 'work.ink' || hostname.endsWith('.work.ink')) {
     const r = await tryVoltar();
