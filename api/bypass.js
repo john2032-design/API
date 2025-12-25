@@ -9,11 +9,26 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,x-user-id');
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (!['GET', 'POST'].includes(req.method)) {
     return res.status(405).json({ status: 'error', result: 'Method not allowed', time_taken: formatDuration(handlerStart) });
   }
+  const incomingUserId =
+    (req.headers && (req.headers['x-user-id'] || req.headers['x_user_id'] || req.headers['x-userid'] || req.headers['X-User-Id'] || req.headers['X-User-Id'.toLowerCase()])) ||
+    (req.body && (req.body['x-user-id'] || req.body['x_user_id'] || req.body['xUserId'])) ||
+    (req.query && (req.query['x-user-id'] || req.query['x_user_id'] || req.query['xUserId'])) ||
+    '';
+  try {
+    if (incomingUserId) {
+      if (req.method === 'POST' && req.body && !req.body['x_user_id'] && !req.body['x-user-id'] && !req.body['xUserId']) {
+        req.body['x_user_id'] = incomingUserId;
+      }
+      if (req.method === 'GET' && req.query && !req.query['x_user_id'] && !req.query['x-user-id'] && !req.query['xUserId']) {
+        req.query['x_user_id'] = incomingUserId;
+      }
+    }
+  } catch (e) {}
   const url = req.method === 'GET' ? req.query.url : req.body?.url;
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ status: 'error', result: 'Missing url parameter', time_taken: formatDuration(handlerStart) });
@@ -38,7 +53,7 @@ module.exports = async (req, res) => {
   const isEasOnly = easOnly.some(d => hostname === d || hostname.endsWith('.' + d));
   const voltarBase = 'http://77.110.121.76:3000';
   const voltarHeaders = {
-    'x-user-id': '',
+    'x-user-id': incomingUserId || '',
     'x-api-key': '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa',
     'Content-Type': 'application/json'
   };
@@ -59,15 +74,22 @@ module.exports = async (req, res) => {
   const tryVoltar = async () => {
     const start = getCurrentTime();
     try {
-      const createRes = await axios.post(`${voltarBase}/bypass/createTask`, { url, cache: true }, { headers: voltarHeaders });
+      const createPayload = { url, cache: true };
+      if (incomingUserId) createPayload.x_user_id = incomingUserId;
+      const createRes = await axios.post(`${voltarBase}/bypass/createTask`, createPayload, { headers: voltarHeaders });
       if (createRes.data.status !== 'success' || !createRes.data.taskId) return 'unsupported';
       const taskId = createRes.data.taskId;
       for (let i = 0; i < 140; i++) {
         await new Promise(r => setTimeout(r, 1000));
         try {
-          const resultRes = await axios.get(`${voltarBase}/bypass/getTaskResult/${taskId}`, { headers: { 'x-api-key': voltarHeaders['x-api-key'] } });
+          const resultRes = await axios.get(`${voltarBase}/bypass/getTaskResult/${taskId}`, {
+            headers: {
+              'x-api-key': voltarHeaders['x-api-key'],
+              'x-user-id': voltarHeaders['x-user-id']
+            }
+          });
           if (resultRes.data.status === 'success' && resultRes.data.result) {
-            res.json({ status: 'success', result: resultRes.data.result, time_taken: formatDuration(start) });
+            res.json({ status: 'success', result: resultRes.data.result, x_user_id: incomingUserId || '', time_taken: formatDuration(start) });
             return true;
           }
         } catch {}
@@ -85,7 +107,7 @@ module.exports = async (req, res) => {
       const d = r.data;
       const link = d?.result || d?.destination || d?.url || d?.link || d?.data;
       if (link) {
-        res.json({ status: 'success', result: link, time_taken: formatDuration(start) });
+        res.json({ status: 'success', result: link, x_user_id: incomingUserId || '', time_taken: formatDuration(start) });
         return true;
       }
       if (/unsupported|not supported|missing_url/i.test(String(d?.message || d?.error || d?.result || ''))) return 'unsupported';
@@ -272,7 +294,7 @@ module.exports = async (req, res) => {
       if (typeof finalLink === 'object') finalLink = finalLink?.result || finalLink?.link || finalLink?.url || finalLink?.destination || JSON.stringify(finalLink);
       finalLink = String(finalLink || '');
       if (finalLink.length === 0) return false;
-      res.json({ status: 'success', result: finalLink, time_taken: formatDuration(start) });
+      res.json({ status: 'success', result: finalLink, x_user_id: incomingUserId || '', time_taken: formatDuration(start) });
       return true;
     } catch (e) {
       if (e.response?.status === 404) return 'unsupported';
@@ -300,7 +322,7 @@ module.exports = async (req, res) => {
       try { decrypted = await decryptFn({ key, data: data.adata, cipherMessage: data.ct }); } catch (e) {
         return res.status(500).json({ status: 'error', result: `Decryption failed: ${String(e.message || e)}`, time_taken: formatDuration(handlerStart) });
       }
-      return res.json({ status: 'success', result: decrypted, time_taken: formatDuration(start) });
+      return res.json({ status: 'success', result: decrypted, x_user_id: incomingUserId || '', time_taken: formatDuration(start) });
     } catch (e) {
       return res.status(500).json({ status: 'error', result: `Paste.to handling failed: ${String(e.message || e)}`, time_taken: formatDuration(handlerStart) });
     }
@@ -318,31 +340,31 @@ module.exports = async (req, res) => {
         return res.status(500).json({ status: 'error', result: 'keyText not found', time_taken: formatDuration(handlerStart) });
       }
       const keyText = m[1].trim();
-      return res.json({ status: 'success', result: keyText, time_taken: formatDuration(start) });
+      return res.json({ status: 'success', result: keyText, x_user_id: incomingUserId || '', time_taken: formatDuration(start) });
     } catch (e) {
       return res.status(500).json({ status: 'error', result: `Key fetch failed: ${String(e.message || e)}`, time_taken: formatDuration(handlerStart) });
     }
   }
   if (hostname === 'overdrivehub.xyz' || hostname.endsWith('.overdrivehub.xyz')) {
     const r = await tryOverdrive();
-    if (r && r.status === 'success') return res.json(r);
-    if (r && r.status === 'error') return res.status(500).json(r);
-    return res.status(500).json({ status: 'error', result: 'Overdrive bypass failed', time_taken: formatDuration(handlerStart) });
+    if (r && r.status === 'success') return res.json({ ...r, x_user_id: incomingUserId || '' });
+    if (r && r.status === 'error') return res.status(500).json({ ...r, x_user_id: incomingUserId || '' });
+    return res.status(500).json({ status: 'error', result: 'Overdrive bypass failed', x_user_id: incomingUserId || '', time_taken: formatDuration(handlerStart) });
   }
   if (hostname === 'bstlar.com' || hostname.endsWith('.bstlar.com')) {
     const r = await tryBstlar();
     if (r === true) return;
-    return res.json({ status: 'error', result: 'Bypass Failed :(', time_taken: formatDuration(handlerStart) });
+    return res.json({ status: 'error', result: 'Bypass Failed :(', x_user_id: incomingUserId || '', time_taken: formatDuration(handlerStart) });
   }
   if (isVoltarOnly || hostname === 'work.ink' || hostname.endsWith('.work.ink')) {
     const r = await tryVoltar();
     if (r === true) return;
-    return res.json({ status: 'error', result: 'Bypass Failed :(', time_taken: formatDuration(handlerStart) });
+    return res.json({ status: 'error', result: 'Bypass Failed :(', x_user_id: incomingUserId || '', time_taken: formatDuration(handlerStart) });
   }
   if (isEasOnly) {
     const r = await tryApi(easConfig);
     if (r === true) return;
-    return res.json({ status: 'error', result: 'Bypass Failed :(', time_taken: formatDuration(handlerStart) });
+    return res.json({ status: 'error', result: 'Bypass Failed :(', x_user_id: incomingUserId || '', time_taken: formatDuration(handlerStart) });
   }
   const voltarFirst = await tryVoltar();
   if (voltarFirst === true) return;
@@ -350,5 +372,5 @@ module.exports = async (req, res) => {
   if (aceResult === true) return;
   const easResult = await tryApi(easConfig);
   if (easResult === true) return;
-  res.json({ status: 'error', result: 'Bypass Failed :(', time_taken: formatDuration(handlerStart) });
+  res.json({ status: 'error', result: 'Bypass Failed :(', x_user_id: incomingUserId || '', time_taken: formatDuration(handlerStart) });
 };
