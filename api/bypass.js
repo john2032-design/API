@@ -14,21 +14,6 @@ module.exports = async (req, res) => {
   if (!['GET', 'POST'].includes(req.method)) {
     return res.status(405).json({ status: 'error', result: 'Method not allowed', time_taken: formatDuration(handlerStart) });
   }
-  const incomingUserId =
-    (req.headers && (req.headers['x-user-id'] || req.headers['x_user_id'] || req.headers['x-userid'] || req.headers['X-User-Id'] || req.headers['X-User-Id'.toLowerCase()])) ||
-    (req.body && (req.body['x-user-id'] || req.body['x_user_id'] || req.body['xUserId'])) ||
-    (req.query && (req.query['x-user-id'] || req.query['x_user_id'] || req.query['xUserId'])) ||
-    '';
-  try {
-    if (incomingUserId) {
-      if (req.method === 'POST' && req.body && !req.body['x_user_id'] && !req.body['x-user-id'] && !req.body['xUserId']) {
-        req.body['x_user_id'] = incomingUserId;
-      }
-      if (req.method === 'GET' && req.query && !req.query['x_user_id'] && !req.query['x-user-id'] && !req.query['xUserId']) {
-        req.query['x_user_id'] = incomingUserId;
-      }
-    }
-  } catch (e) {}
   const url = req.method === 'GET' ? req.query.url : req.body?.url;
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ status: 'error', result: 'Missing url parameter', time_taken: formatDuration(handlerStart) });
@@ -52,6 +37,26 @@ module.exports = async (req, res) => {
   const isVoltarOnly = voltarOnly.some(d => hostname === d || hostname.endsWith('.' + d));
   const isEasOnly = easOnly.some(d => hostname === d || hostname.endsWith('.' + d));
   const voltarBase = 'http://77.110.121.76:3000';
+  let incomingUserId = '';
+  if (isVoltarOnly || hostname === 'work.ink' || hostname.endsWith('.work.ink')) {
+    if (req.method === 'POST') {
+      incomingUserId = (req.body && (req.body['x_user_id'] || req.body['x-user-id'] || req.body.xUserId)) || '';
+      if (!incomingUserId) {
+        return res.status(400).json({ status: 'error', result: 'Missing x_user_id in POST body for Voltar', time_taken: formatDuration(handlerStart) });
+      }
+    } else {
+      incomingUserId = (req.headers && (req.headers['x-user-id'] || req.headers['x_user_id'] || req.headers['x-userid'])) || '';
+      if (!incomingUserId) {
+        return res.status(400).json({ status: 'error', result: 'Missing x-user-id header for Voltar', time_taken: formatDuration(handlerStart) });
+      }
+    }
+  } else {
+    if (req.method === 'POST') {
+      incomingUserId = (req.body && (req.body['x_user_id'] || req.body['x-user-id'] || req.body.xUserId)) || '';
+    } else {
+      incomingUserId = (req.headers && (req.headers['x-user-id'] || req.headers['x_user_id'] || req.headers['x-userid'])) || '';
+    }
+  }
   const voltarHeaders = {
     'x-user-id': incomingUserId || '',
     'x-api-key': '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa',
