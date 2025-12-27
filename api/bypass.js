@@ -4,6 +4,7 @@ const formatDuration = (startNs, endNs = process.hrtime.bigint()) => {
   const durationSec = durationNs / 1_000_000_000;
   return `${durationSec.toFixed(2)}s`;
 };
+
 module.exports = async (req, res) => {
   const handlerStart = getCurrentTime();
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -14,14 +15,17 @@ module.exports = async (req, res) => {
   if (!['GET', 'POST'].includes(req.method)) {
     return res.status(405).json({ status: 'error', result: 'Method not allowed', time_taken: formatDuration(handlerStart) });
   }
+
   const url = req.method === 'GET' ? req.query.url : req.body?.url;
   if (!url || typeof url !== 'string') {
     return res.status(400).json({ status: 'error', result: 'Missing url parameter', time_taken: formatDuration(handlerStart) });
   }
+
   let axios;
   try { axios = require('axios'); } catch {
     return res.status(500).json({ status: 'error', result: 'axios missing', time_taken: formatDuration(handlerStart) });
   }
+
   let hostname = '';
   try {
     hostname = new URL(url).hostname.toLowerCase();
@@ -32,12 +36,16 @@ module.exports = async (req, res) => {
   if (!hostname) {
     return res.status(400).json({ status: 'error', result: 'Invalid URL', time_taken: formatDuration(handlerStart) });
   }
+
   const voltarOnly = ['pandadevelopment.net','auth.plato','work.ink','link4m.com','keyrblx.com','link4sub.com','linkify.ru','sub4unlock.io','sub2unlock','sub2get.com','sub2unlock.net'];
   const easOnly = ['rentry.org','paster.so','loot-link.com','loot-links.com','lootlink.org','lootlinks.co','lootdest.info','lootdest.org','lootdest.com','links-loot.com','linksloot.net'];
+
   const isVoltarOnly = voltarOnly.some(d => hostname === d || hostname.endsWith('.' + d));
   const isEasOnly = easOnly.some(d => hostname === d || hostname.endsWith('.' + d));
+
   const voltarBase = 'http://77.110.121.76:3000';
   let incomingUserId = '';
+
   if (isVoltarOnly || hostname === 'work.ink' || hostname.endsWith('.work.ink')) {
     if (req.method === 'POST') {
       incomingUserId = (req.body && (req.body['x_user_id'] || req.body['x-user-id'] || req.body.xUserId)) || '';
@@ -57,11 +65,13 @@ module.exports = async (req, res) => {
       incomingUserId = (req.headers && (req.headers['x-user-id'] || req.headers['x_user_id'] || req.headers['x-userid'])) || '';
     }
   }
+
   const voltarHeaders = {
     'x-user-id': incomingUserId || '',
     'x-api-key': '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa',
     'Content-Type': 'application/json'
   };
+
   const easConfig = {
     method: 'POST',
     url: 'https://api.eas-x.com/v3/bypass',
@@ -72,17 +82,14 @@ module.exports = async (req, res) => {
     },
     data: { url }
   };
-  const aceConfig = {
-    method: 'GET',
-    url: `https://ace-bypass.com/api/bypass?url=${encodeURIComponent(url)}&apikey=${process.env.ACE_API_KEY || 'FREE_S7MdXC0momgajOEx1_UKW7FQUvbmzvalu0gTwr-V6cI'}`
-  };
+
   const tryVoltar = async () => {
     const start = getCurrentTime();
     try {
       const createPayload = { url, cache: true };
       if (incomingUserId) createPayload.x_user_id = incomingUserId;
       const createRes = await axios.post(`${voltarBase}/bypass/createTask`, createPayload, { headers: voltarHeaders });
-      if (createRes.data.status !== 'success' || !createRes.data.taskId) return 'unsupported';
+      if (createRes.data.status !== 'success' || !createRes.data.taskId) return { success: false, unsupported: true };
       const taskId = createRes.data.taskId;
       for (let i = 0; i < 140; i++) {
         await new Promise(r => setTimeout(r, 1000));
@@ -95,35 +102,44 @@ module.exports = async (req, res) => {
           });
           if (resultRes.data.status === 'success' && resultRes.data.result) {
             res.json({ status: 'success', result: resultRes.data.result, x_user_id: incomingUserId || '', time_taken: formatDuration(start) });
-            return true;
+            return { success: true };
           }
         } catch {}
       }
-      return false;
+      return { success: false };
     } catch (e) {
-      if (e.response?.data?.message && /unsupported|invalid|not supported/i.test(e.response.data.message)) return 'unsupported';
-      return false;
+      if (e.response?.data?.message && /unsupported|invalid|not supported/i.test(e.response.data.message)) {
+        return { success: false, unsupported: true };
+      }
+      return { success: false };
     }
   };
-  const tryApi = async (config) => {
+
+  const tryEas = async () => {
     const start = getCurrentTime();
     try {
-      const r = await axios(config);
+      const r = await axios(easConfig);
       const d = r.data;
       const link = d?.result || d?.destination || d?.url || d?.link || d?.data;
       if (link) {
         res.json({ status: 'success', result: link, x_user_id: incomingUserId || '', time_taken: formatDuration(start) });
-        return true;
+        return { success: true };
       }
-      if (/unsupported|not supported|missing_url/i.test(String(d?.message || d?.error || d?.result || ''))) return 'unsupported';
+      if (/unsupported|not supported|missing_url/i.test(String(d?.message || d?.error || d?.result || ''))) {
+        return { success: false, unsupported: true };
+      }
+      return { success: false };
     } catch (e) {
       if (e.response?.data) {
         const msg = e.response.data?.message || e.response.data?.error || e.response.data?.result || '';
-        if (/unsupported|not supported|missing_url/i.test(String(msg))) return 'unsupported';
+        if (/unsupported|not supported|missing_url/i.test(String(msg))) {
+          return { success: false, unsupported: true };
+        }
       }
+      return { success: false };
     }
-    return false;
   };
+
   const tryOverdrive = async () => {
     const start = getCurrentTime();
     try {
@@ -263,6 +279,7 @@ module.exports = async (req, res) => {
       return { status: 'error', result: `Overdrive handling exception: ${String(e.message || e)}`, time_taken: formatDuration(start) };
     }
   };
+
   const tryBstlar = async () => {
     const start = getCurrentTime();
     try {
@@ -308,6 +325,7 @@ module.exports = async (req, res) => {
       return false;
     }
   };
+
   if (hostname === 'paste.to' || hostname.endsWith('.paste.to')) {
     const start = getCurrentTime();
     try {
@@ -332,6 +350,7 @@ module.exports = async (req, res) => {
       return res.status(500).json({ status: 'error', result: `Paste.to handling failed: ${String(e.message || e)}`, time_taken: formatDuration(handlerStart) });
     }
   }
+
   if (
     hostname === 'get-key.keysystem2352.workers.dev' ||
     hostname === 'get-key.keysystem352.workers.dev'
@@ -350,32 +369,37 @@ module.exports = async (req, res) => {
       return res.status(500).json({ status: 'error', result: `Key fetch failed: ${String(e.message || e)}`, time_taken: formatDuration(handlerStart) });
     }
   }
+
   if (hostname === 'overdrivehub.xyz' || hostname.endsWith('.overdrivehub.xyz')) {
     const r = await tryOverdrive();
     if (r && r.status === 'success') return res.json({ ...r, x_user_id: incomingUserId || '' });
     if (r && r.status === 'error') return res.status(500).json({ ...r, x_user_id: incomingUserId || '' });
     return res.status(500).json({ status: 'error', result: 'Overdrive bypass failed', x_user_id: incomingUserId || '', time_taken: formatDuration(handlerStart) });
   }
+
   if (hostname === 'bstlar.com' || hostname.endsWith('.bstlar.com')) {
     const r = await tryBstlar();
     if (r === true) return;
     return res.json({ status: 'error', result: 'Bypass Failed :(', x_user_id: incomingUserId || '', time_taken: formatDuration(handlerStart) });
   }
+
   if (isVoltarOnly || hostname === 'work.ink' || hostname.endsWith('.work.ink')) {
-    const r = await tryVoltar();
-    if (r === true) return;
+    const voltarResult = await tryVoltar();
+    if (voltarResult.success) return;
     return res.json({ status: 'error', result: 'Bypass Failed :(', x_user_id: incomingUserId || '', time_taken: formatDuration(handlerStart) });
   }
+
   if (isEasOnly) {
-    const r = await tryApi(easConfig);
-    if (r === true) return;
+    const easResult = await tryEas();
+    if (easResult.success) return;
     return res.json({ status: 'error', result: 'Bypass Failed :(', x_user_id: incomingUserId || '', time_taken: formatDuration(handlerStart) });
   }
-  const voltarFirst = await tryVoltar();
-  if (voltarFirst === true) return;
-  const aceResult = await tryApi(aceConfig);
-  if (aceResult === true) return;
-  const easResult = await tryApi(easConfig);
-  if (easResult === true) return;
+
+  const voltarResult = await tryVoltar();
+  if (voltarResult.success) return;
+
+  const easResult = await tryEas();
+  if (easResult.success) return;
+
   res.json({ status: 'error', result: 'Bypass Failed :(', x_user_id: incomingUserId || '', time_taken: formatDuration(handlerStart) });
 };
