@@ -43,7 +43,7 @@ module.exports = async (req, res) => {
   const isVoltarOnly = voltarOnly.some(d => hostname === d || hostname.endsWith('.' + d));
   const isEasOnly = easOnly.some(d => hostname === d || hostname.endsWith('.' + d));
 
-  const voltarBase = 'http://77.110.121.76:3000';
+  const voltarBase = 'https://api.voltar.lol';
   let incomingUserId = '';
 
   if (isVoltarOnly || hostname === 'work.ink' || hostname.endsWith('.work.ink')) {
