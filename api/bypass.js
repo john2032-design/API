@@ -37,10 +37,6 @@ module.exports = async (req, res) => {
     return res.status(400).json({ status: 'error', result: 'Invalid URL', time_taken: formatDuration(handlerStart) });
   }
 
-  const voltarOnly = ['pandadevelopment.net','auth.plato','work.ink','link4m.com','keyrblx.com','link4sub.com','linkify.ru','sub4unlock.io','sub2unlock','sub2get.com','sub2unlock.net'];
-
-  const isVoltarOnly = voltarOnly.some(d => hostname === d || hostname.endsWith('.' + d));
-
   const voltarBase = 'https://api.voltar.lol';
   let incomingUserId = '';
 
@@ -64,8 +60,11 @@ module.exports = async (req, res) => {
       const createRes = await axios.post(`${voltarBase}/bypass/createTask`, createPayload, { headers: voltarHeaders });
       if (createRes.data.status !== 'success' || !createRes.data.taskId) return { success: false, unsupported: true };
       const taskId = createRes.data.taskId;
-      while (true) {
-        await new Promise(r => setTimeout(r, 500));
+      let attempts = 0;
+      const maxAttempts = 500;
+      while (attempts < maxAttempts) {
+        await new Promise(r => setTimeout(r, 200));
+        attempts++;
         try {
           const resultRes = await axios.get(`${voltarBase}/bypass/getTaskResult/${taskId}`, {
             headers: {
@@ -79,6 +78,7 @@ module.exports = async (req, res) => {
           }
         } catch {}
       }
+      return { success: false };
     } catch (e) {
       if (e.response?.data?.message && /unsupported|invalid|not supported/i.test(e.response.data.message)) {
         return { success: false, unsupported: true };
