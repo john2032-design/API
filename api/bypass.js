@@ -8,9 +8,9 @@ const formatDuration = (startNs, endNs = process.hrtime.bigint()) => {
 const CONFIG = {
   VOLTAR_BASE: 'https://api.voltar.lol',
   VOLTAR_API_KEY: '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa',
-  MAX_POLL_ATTEMPTS: 80,
-  POLL_INTERVAL: 200,
-  POLL_TIMEOUT: 80000,
+  MAX_POLL_ATTEMPTS: 90,
+  POLL_INTERVAL: 100,
+  POLL_TIMEOUT: 90000,
   SUPPORTED_METHODS: ['GET', 'POST']
 };
 
