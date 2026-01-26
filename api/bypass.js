@@ -9,7 +9,7 @@ const CONFIG = {
   VOLTAR_BASE: 'https://api.voltar.lol',
   VOLTAR_API_KEY: '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa',
   MAX_POLL_ATTEMPTS: 80,
-  POLL_INTERVAL: 1000,
+  POLL_INTERVAL: 200,
   POLL_TIMEOUT: 80000,
   SUPPORTED_METHODS: ['GET', 'POST']
 };
@@ -47,75 +47,44 @@ const extractHostname = (url) => {
   }
 };
 
-const pollTaskResult = async (axios, taskId, headers, startTime, abortController) => {
+const pollTaskResult = async (axios, taskId, headers, startTime) => {
   let attempts = 0;
   const pollStart = Date.now();
-  let currentInterval = CONFIG.POLL_INTERVAL;
-  const MAX_BACKOFF = 5000;
 
   while (attempts < CONFIG.MAX_POLL_ATTEMPTS) {
     if (Date.now() - pollStart > CONFIG.POLL_TIMEOUT) {
-      console.error(`Polling timeout reached after ${attempts} attempts`);
-      abortController.abort();
+      console.error('Polling timeout reached after ' + attempts + ' attempts');
       return null;
     }
 
-    try {
-      const pollPromise = axios.get(
-        `${CONFIG.VOLTAR_BASE}/bypass/getTaskResult/${taskId}`,
-        { headers, signal: abortController.signal }
-      );
-
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Poll request timeout')), 10000)
-      );
-
-      const resultRes = await Promise.race([pollPromise, timeoutPromise]);
-
-      if (resultRes.data.status === 'success' && resultRes.data.result) {
-        return resultRes.data.result;
-      } else if (resultRes.data.status === 'failed' || resultRes.data.status === 'error') {
-        console.error(`Task permanently failed: ${resultRes.data.message || 'Unknown'}`);
-        return null;
-      }
-
-      currentInterval = Math.min(currentInterval * 1.5, MAX_BACKOFF);
-
-    } catch (err) {
-      if (axios.isCancel(err)) {
-        console.error('Polling aborted');
-        return null;
-      }
-
-      const status = err.response?.status;
-      if (status >= 500 || err.code === 'ECONNABORTED' || err.code === 'ETIMEDOUT') {
-        currentInterval = Math.min(currentInterval * 2, MAX_BACKOFF);
-        if (attempts % 5 === 0) {
-          console.error(`Transient poll error (attempt ${attempts}): ${err.message}`);
-        }
-      } else if (status >= 400 && status < 500) {
-        console.error(`Permanent poll error: ${err.message}`);
-        return null;
-      } else {
-        console.error(`Unexpected poll error: ${err.message}`);
-      }
+    if (attempts > 0) {
+      await new Promise(r => setTimeout(r, CONFIG.POLL_INTERVAL));
     }
-
     attempts++;
 
-    if (attempts < CONFIG.MAX_POLL_ATTEMPTS) {
-      await new Promise(r => setTimeout(r, currentInterval));
+    try {
+      const resultRes = await axios.get(
+        `${CONFIG.VOLTAR_BASE}/bypass/getTaskResult/${taskId}`,
+        { headers }
+      );
+      
+      if (resultRes.data.status === 'success' && resultRes.data.result) {
+        return resultRes.data.result;
+      }
+    } catch (err) {
+      if (attempts % 10 === 0) {
+        console.error(`Poll attempt ${attempts} failed: ${err.message}`);
+      }
     }
   }
 
-  console.error(`Max polling attempts reached: ${CONFIG.MAX_POLL_ATTEMPTS}`);
+  console.error('Max polling attempts reached: ' + CONFIG.MAX_POLL_ATTEMPTS);
   return null;
 };
 
 const tryVoltar = async (axios, url, incomingUserId, res, handlerStart) => {
   const start = getCurrentTime();
-  const abortController = new AbortController();
-
+  
   const voltarHeaders = {
     'x-user-id': incomingUserId || '',
     'x-api-key': CONFIG.VOLTAR_API_KEY,
@@ -125,59 +94,38 @@ const tryVoltar = async (axios, url, incomingUserId, res, handlerStart) => {
   try {
     const createPayload = { url, cache: true };
     if (incomingUserId) createPayload.x_user_id = incomingUserId;
-
-    const createPromise = axios.post(
+    
+    const createRes = await axios.post(
       `${CONFIG.VOLTAR_BASE}/bypass/createTask`,
       createPayload,
-      { headers: voltarHeaders, signal: abortController.signal }
+      { headers: voltarHeaders }
     );
-
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => {
-        abortController.abort();
-        reject(new Error('Create task timeout'));
-      }, 10000)
-    );
-
-    const createRes = await Promise.race([createPromise, timeoutPromise]);
-
+    
     if (createRes.data.status !== 'success' || !createRes.data.taskId) {
       console.error('Voltar createTask failed or unsupported');
       return { success: false, unsupported: true };
     }
-
+    
     const taskId = createRes.data.taskId;
-    console.log(`Voltar task created: ${taskId}`);
-
+    console.log('Voltar task created: ' + taskId);
+    
     const pollHeaders = {
       'x-api-key': voltarHeaders['x-api-key'],
       'x-user-id': voltarHeaders['x-user-id']
     };
-
-    const pollingPromise = pollTaskResult(axios, taskId, pollHeaders, start, abortController);
-    const overallTimeout = new Promise((_, reject) =>
-      setTimeout(() => {
-        abortController.abort();
-        reject(new Error('Overall polling timeout'));
-      }, CONFIG.POLL_TIMEOUT)
-    );
-
-    const result = await Promise.race([pollingPromise, overallTimeout]);
-
+    
+    const result = await pollTaskResult(axios, taskId, pollHeaders, start);
+    
     if (result) {
       sendSuccess(res, result, incomingUserId, start);
       return { success: true };
     }
-
+    
     console.error('Voltar polling failed to get result');
     return { success: false };
-
+    
   } catch (e) {
-    if (axios.isCancel(e)) {
-      console.error('Voltar operation aborted due to timeout');
-    } else {
-      console.error(`Voltar error: ${e.message || String(e)}`);
-    }
+    console.error('Voltar error: ' + (e.message || String(e)));
     if (e.response?.data?.message && /unsupported|invalid|not supported/i.test(e.response.data.message)) {
       return { success: false, unsupported: true };
     }
