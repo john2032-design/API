@@ -65,16 +65,33 @@ const pollTaskResult = async (axios, taskId, headers, startTime) => {
     try {
       const resultRes = await axios.get(
         `${CONFIG.VOLTAR_BASE}/bypass/getTaskResult/${taskId}`,
-        { headers }
+        { headers, timeout: 0 }
       );
-      
-      if (resultRes.data.status === 'success' && resultRes.data.result) {
-        return resultRes.data.result;
+
+      const data = resultRes?.data;
+
+      if (!data) {
+        console.error(`Voltar returned empty response on attempt ${attempts}`);
+        return null;
       }
+
+      if (data.status === 'success' && data.result) {
+        return data.result;
+      }
+
+      if (data.status === 'error' || data.status === 'failed' || data.error) {
+        console.error(`Voltar task error (attempt ${attempts}): ${data.message || JSON.stringify(data)}`);
+        return null;
+      }
+
+      if (data.message && /unsupported|invalid|not supported|failed/i.test(String(data.message))) {
+        console.error(`Voltar task terminal message (attempt ${attempts}): ${data.message}`);
+        return null;
+      }
+
     } catch (err) {
-      if (attempts % 10 === 0) {
-        console.error(`Poll attempt ${attempts} failed: ${err.message}`);
-      }
+      console.error(`Polling aborted due to error on attempt ${attempts}: ${err?.message || String(err)}`);
+      return null;
     }
   }
 
@@ -84,7 +101,7 @@ const pollTaskResult = async (axios, taskId, headers, startTime) => {
 
 const tryVoltar = async (axios, url, incomingUserId, res, handlerStart) => {
   const start = getCurrentTime();
-  
+
   const voltarHeaders = {
     'x-user-id': incomingUserId || '',
     'x-api-key': CONFIG.VOLTAR_API_KEY,
@@ -94,39 +111,39 @@ const tryVoltar = async (axios, url, incomingUserId, res, handlerStart) => {
   try {
     const createPayload = { url, cache: true };
     if (incomingUserId) createPayload.x_user_id = incomingUserId;
-    
+
     const createRes = await axios.post(
       `${CONFIG.VOLTAR_BASE}/bypass/createTask`,
       createPayload,
-      { headers: voltarHeaders }
+      { headers: voltarHeaders, timeout: 0 }
     );
-    
-    if (createRes.data.status !== 'success' || !createRes.data.taskId) {
+
+    if (createRes?.data?.status !== 'success' || !createRes?.data?.taskId) {
       console.error('Voltar createTask failed or unsupported');
       return { success: false, unsupported: true };
     }
-    
+
     const taskId = createRes.data.taskId;
     console.log('Voltar task created: ' + taskId);
-    
+
     const pollHeaders = {
       'x-api-key': voltarHeaders['x-api-key'],
       'x-user-id': voltarHeaders['x-user-id']
     };
-    
+
     const result = await pollTaskResult(axios, taskId, pollHeaders, start);
-    
+
     if (result) {
       sendSuccess(res, result, incomingUserId, start);
       return { success: true };
     }
-    
+
     console.error('Voltar polling failed to get result');
     return { success: false };
-    
+
   } catch (e) {
-    console.error('Voltar error: ' + (e.message || String(e)));
-    if (e.response?.data?.message && /unsupported|invalid|not supported/i.test(e.response.data.message)) {
+    console.error('Voltar error: ' + (e?.message || String(e)));
+    if (e?.response?.data?.message && /unsupported|invalid|not supported/i.test(e.response.data.message)) {
       return { success: false, unsupported: true };
     }
     return { success: false };
@@ -135,7 +152,7 @@ const tryVoltar = async (axios, url, incomingUserId, res, handlerStart) => {
 
 const handlePasteTo = async (axios, url, incomingUserId, handlerStart, res) => {
   const start = getCurrentTime();
-  
+
   try {
     let parsed;
     try {
@@ -143,74 +160,83 @@ const handlePasteTo = async (axios, url, incomingUserId, handlerStart, res) => {
     } catch {
       parsed = null;
     }
-    
+
     const key = parsed && parsed.hash ? parsed.hash.slice(1) : (url.split('#')[1] || '');
-    
+
     if (!key) {
       return sendError(res, 400, 'Missing paste key', handlerStart);
     }
-    
-    const jsonUrl = parsed ? (parsed.hash = '', parsed.toString()) : url.split('#')[0];
-    
+
+    let jsonUrl;
+    if (parsed) {
+      const tmp = new URL(parsed.toString());
+      tmp.hash = '';
+      jsonUrl = tmp.toString();
+    } else {
+      jsonUrl = url.split('#')[0];
+    }
+
     const r = await axios.get(jsonUrl, {
-      headers: { Accept: 'application/json, text/javascript, */*; q=0.01' }
+      headers: { Accept: 'application/json, text/javascript, */*; q=0.01' },
+      timeout: 0
     });
-    
+
     const data = r.data;
-    
+
     if (!data || !data.ct || !data.adata) {
       return sendError(res, 500, 'Paste data not found', handlerStart);
     }
-    
+
     let lib;
     try {
       lib = await import('privatebin-decrypt');
     } catch {
       lib = require('privatebin-decrypt');
     }
-    
+
     const decryptFn = lib.decryptPrivateBin || lib.default?.decryptPrivateBin || lib.default || lib;
-    
+
     if (typeof decryptFn !== 'function') {
       return sendError(res, 500, 'privatebin-decrypt export not recognized', handlerStart);
     }
-    
+
     let decrypted;
     try {
       decrypted = await decryptFn({ key, data: data.adata, cipherMessage: data.ct });
     } catch (e) {
-      return sendError(res, 500, `Decryption failed: ${String(e.message || e)}`, handlerStart);
+      return sendError(res, 500, `Decryption failed: ${String(e?.message || e)}`, handlerStart);
     }
-    
+
     return sendSuccess(res, decrypted, incomingUserId, start);
-    
+
   } catch (e) {
-    console.error('Paste.to handling error: ' + (e.message || String(e)));
-    return sendError(res, 500, `Paste.to handling failed: ${String(e.message || e)}`, handlerStart);
+    console.error('Paste.to handling error: ' + (e?.message || String(e)));
+    return sendError(res, 500, `Paste.to handling failed: ${String(e?.message || e)}`, handlerStart);
   }
 };
 
 const handleKeySystem = async (axios, url, incomingUserId, handlerStart, res) => {
   const start = getCurrentTime();
-  
+
   try {
     const r = await axios.get(url, {
-      headers: { Accept: 'text/html,*/*' }
+      headers: { Accept: 'text/html,*/*' },
+      timeout: 0
     });
-    
+
     const body = String(r.data || '');
     const match = body.match(/id=["']keyText["'][^>]*>\s*([\s\S]*?)\s*<\/div>/i);
-    
+
     if (!match) {
       return sendError(res, 500, 'keyText not found', handlerStart);
     }
-    
+
     const keyText = match[1].trim();
     return sendSuccess(res, keyText, incomingUserId, start);
-    
+
   } catch (e) {
-    console.error('KeySystem handling error: ' + (e.message || String(e)));
-    return sendError(res, 500, `Key fetch failed: ${String(e.message || e)}`, handlerStart);
+    console.error('KeySystem handling error: ' + (e?.message || String(e)));
+    return sendError(res, 500, `Key fetch failed: ${String(e?.message || e)}`, handlerStart);
   }
 };
 
@@ -224,9 +250,9 @@ const setCorsHeaders = (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
-  
+
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,x-user-id');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,x-user-id,x_user_id,x-userid,x-api-key');
 };
 
 const sanitizeUrl = (url) => {
@@ -236,22 +262,22 @@ const sanitizeUrl = (url) => {
 
 module.exports = async (req, res) => {
   const handlerStart = getCurrentTime();
-  
+
   console.log(`[${new Date().toISOString()}] ${req.method} request received`);
-  
+
   setCorsHeaders(req, res);
-  
+
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
-  
+
   if (!CONFIG.SUPPORTED_METHODS.includes(req.method)) {
     console.error('Method not allowed: ' + req.method);
     return sendError(res, 405, 'Method not allowed', handlerStart);
   }
 
   let url = req.method === 'GET' ? req.query.url : req.body?.url;
-  
+
   if (!url || typeof url !== 'string') {
     console.error('Missing or invalid url parameter');
     return sendError(res, 400, 'Missing url parameter', handlerStart);
@@ -268,7 +294,7 @@ module.exports = async (req, res) => {
   }
 
   const hostname = extractHostname(url);
-  
+
   if (!hostname) {
     console.error('Invalid URL provided: ' + url);
     return sendError(res, 400, 'Invalid URL', handlerStart);
@@ -290,7 +316,7 @@ module.exports = async (req, res) => {
 
   console.log('Attempting Voltar bypass');
   const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
-  
+
   if (voltarResult.success) {
     console.log('Voltar bypass successful');
     return;
