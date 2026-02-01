@@ -9,7 +9,7 @@ const CONFIG = {
   VOLTAR_BASE: 'https://api.voltar.lol',
   VOLTAR_API_KEY: '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa',
   MAX_POLL_ATTEMPTS: 90,
-  POLL_INTERVAL: 200,
+  POLL_INTERVAL: 100,
   POLL_TIMEOUT: 90000,
   SUPPORTED_METHODS: ['GET', 'POST']
 };
@@ -210,6 +210,7 @@ const tryBacon = async (axios, url, incomingUserId, res, handlerStart) => {
     const requestUrl = `${BACON_BASE}/bypass?url=${encodeURIComponent(url)}`;
     const r = await axios.get(requestUrl, { headers: { 'x-api-key': BACON_KEY }, timeout: BACON_TIMEOUT });
     const data = r?.data || {};
+    const statusString = String(data.status || '').toLowerCase();
     let candidateResult = '';
     if (typeof data.result === 'string' && data.result) {
       candidateResult = data.result;
@@ -224,13 +225,22 @@ const tryBacon = async (axios, url, incomingUserId, res, handlerStart) => {
     } else if (typeof data.url === 'string' && data.url) {
       candidateResult = data.url;
     }
-    const statusString = String(data.status || '').toLowerCase();
     if (statusString === 'success' && candidateResult) {
       sendSuccess(res, candidateResult, incomingUserId, start);
       return { success: true };
     }
+    if (statusString === 'error') {
+      const msg = typeof data.message === 'string' && data.message ? data.message : 'Bacon bypass error';
+      sendError(res, 500, msg, start);
+      return { success: false, handled: true };
+    }
     return { success: false };
   } catch (e) {
+    if (e?.response?.data && typeof e.response.data === 'object' && String(e.response.data.status || '').toLowerCase() === 'error' && typeof e.response.data.message === 'string') {
+      const msg = e.response.data.message;
+      sendError(res, 500, msg, start);
+      return { success: false, handled: true };
+    }
     return { success: false };
   }
 };
@@ -357,6 +367,9 @@ module.exports = async (req, res) => {
       if (baconRes.success) {
         return;
       }
+      if (baconRes.handled) {
+        return;
+      }
       const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
       if (voltarResult.success) {
         return;
@@ -370,6 +383,9 @@ module.exports = async (req, res) => {
       }
       const baconRes = await tryBacon(axios, url, incomingUserId, res, handlerStart);
       if (baconRes.success) {
+        return;
+      }
+      if (baconRes.handled) {
         return;
       }
       return sendError(res, 500, 'Bypass Failed :(', handlerStart);
