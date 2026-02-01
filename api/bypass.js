@@ -9,9 +9,103 @@ const CONFIG = {
   VOLTAR_BASE: 'https://api.voltar.lol',
   VOLTAR_API_KEY: '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa',
   MAX_POLL_ATTEMPTS: 90,
-  POLL_INTERVAL: 200,
+  POLL_INTERVAL: 100,
   POLL_TIMEOUT: 90000,
   SUPPORTED_METHODS: ['GET', 'POST']
+};
+
+const BACON_BASE = 'https://free.baconbypass.online';
+const BACON_KEY = '9d94a66be3d84725422290841a93da785ecf26d47ce62f92';
+const BACON_TIMEOUT = 120000;
+const BACON_RATE_WINDOW_MS = 7000;
+const BACON_RATE_MAX = 3;
+
+const BACON_FIRST_LIST = [
+  'https://adfoc.us/',
+  'https://blog.tapvietcode.com/',
+  'https://blox-script.com/get-key',
+  'https://blox-script.com/subscribe',
+  'https://boost.ink/',
+  'https://bst.gg/',
+  'https://bstshrt.com/',
+  'https://deltaios-executor.com/',
+  'https://go.linkify.ru/',
+  'https://krnl-ios.com/',
+  'https://ldnesfspublic.org/',
+  'https://link-unlock.com/',
+  'https://link4sub.com/',
+  'https://linkunlocker.com/',
+  'https://linkzy.space/',
+  'https://mboost.me/',
+  'https://mendationforc.info/',
+  'https://neoxsoftworks.eu/',
+  'https://nirbytes.com/sub2unlock/',
+  'https://ntt-hub.xyz/key/get-key?hwid=',
+  'https://ntt-hub.xyz/key/ntt-hub.html?hwid=',
+  'https://paste-drop.com/',
+  'https://pastebin.com/',
+  'https://pastefy.app/',
+  'https://rekonise.com/',
+  'https://rekonise.org/',
+  'https://rkns.link/',
+  'https://robloxscripts.gg/',
+  'https://scriptpastebins.com/',
+  'https://smplu.link/Keysystem',
+  'https://social-unlock.com/',
+  'https://socialwolvez.com/',
+  'https://sub2get.com/',
+  'https://sub2unlock.com/',
+  'https://sub2unlock.io/',
+  'https://sub2unlock.me/',
+  'https://sub2unlock.top/',
+  'https://sub4unlock.co/',
+  'https://sub4unlock.com/',
+  'https://sub4unlock.pro/',
+  'https://subnise.com/link/',
+  'https://www.jinkx.pro/'
+].map(s => s.toLowerCase());
+
+const BACON_FALLBACK_LIST = [
+  'https://auth.platoboost.app/',
+  'https://auth.platoboost.me/',
+  'https://auth.platorelay.com',
+  'https://link-center.net/',
+  'https://link-hub.net/',
+  'https://link-target.net/',
+  'https://link-to.net/',
+  'https://direct-link.net/',
+  'https://linkvertise.com/'
+].map(s => s.toLowerCase());
+
+const baconFallbackHosts = BACON_FALLBACK_LIST.map(u => {
+  try {
+    return new URL(u).hostname.toLowerCase();
+  } catch {
+    return u.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase();
+  }
+});
+
+let baconCallTimestamps = [];
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+const ensureBaconRateLimit = async () => {
+  const now = Date.now();
+  baconCallTimestamps = baconCallTimestamps.filter(ts => now - ts < BACON_RATE_WINDOW_MS);
+
+  if (baconCallTimestamps.length < BACON_RATE_MAX) {
+    baconCallTimestamps.push(now);
+    return;
+  }
+
+  const earliest = baconCallTimestamps[0];
+  const waitMs = BACON_RATE_WINDOW_MS - (now - earliest) + 10;
+  console.log(`Bacon rate limit reached. Waiting ${waitMs}ms for slot.`);
+  await sleep(waitMs);
+
+  const afterNow = Date.now();
+  baconCallTimestamps = baconCallTimestamps.filter(ts => afterNow - ts < BACON_RATE_WINDOW_MS);
+  baconCallTimestamps.push(afterNow);
 };
 
 const sendError = (res, statusCode, message, startTime) => {
@@ -146,6 +240,45 @@ const tryVoltar = async (axios, url, incomingUserId, res, handlerStart) => {
     if (e?.response?.data?.message && /unsupported|invalid|not supported/i.test(e.response.data.message)) {
       return { success: false, unsupported: true };
     }
+    return { success: false };
+  }
+};
+
+const tryBacon = async (axios, url, incomingUserId, res, handlerStart) => {
+  const start = getCurrentTime();
+
+  try {
+    await ensureBaconRateLimit();
+
+    const requestUrl = `${BACON_BASE}/bypass?url=${encodeURIComponent(url)}`;
+    const r = await axios.get(requestUrl, {
+      headers: { 'x-api-key': BACON_KEY },
+      timeout: BACON_TIMEOUT
+    });
+
+    const data = r?.data;
+
+    if (!data) {
+      console.error('Bacon returned empty response');
+      return { success: false };
+    }
+
+    if (data.status === 'success' && data.result) {
+      console.log('Bacon bypass successful: ' + String(data.result));
+      sendSuccess(res, data.result, incomingUserId, start);
+      return { success: true };
+    }
+
+    if (data.status === 'error') {
+      console.error('Bacon returned error: ' + (data.message || JSON.stringify(data)));
+      return { success: false };
+    }
+
+    console.error('Bacon returned unrecognized response: ' + JSON.stringify(data));
+    return { success: false };
+
+  } catch (e) {
+    console.error('Bacon error: ' + (e?.message || String(e)));
     return { success: false };
   }
 };
@@ -314,14 +447,58 @@ module.exports = async (req, res) => {
     return await handleKeySystem(axios, url, incomingUserId, handlerStart, res);
   }
 
-  console.log('Attempting Voltar bypass');
-  const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
+  const urlLower = url.toLowerCase();
+  const isBaconFirst = BACON_FIRST_LIST.some(prefix => urlLower.startsWith(prefix));
+  const isBaconFallback = baconFallbackHosts.some(h => hostname === h || hostname.endsWith('.' + h) || urlLower.includes(h));
 
-  if (voltarResult.success) {
-    console.log('Voltar bypass successful');
-    return;
+  try {
+    if (isBaconFirst) {
+      console.log('URL matches Bacon-first list; attempting Bacon API first');
+      const baconRes = await tryBacon(axios, url, incomingUserId, res, handlerStart);
+      if (baconRes.success) {
+        console.log('Returned result from Bacon-first API');
+        return;
+      }
+      console.log('Bacon API failed for Bacon-first URL; falling back to Voltar');
+      const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
+      if (voltarResult.success) {
+        console.log('Voltar succeeded after Bacon failed');
+        return;
+      }
+      console.error('All bypass methods failed (Bacon-first flow)');
+      return sendError(res, 500, 'Bypass Failed :(', handlerStart);
+    }
+
+    if (isBaconFallback) {
+      console.log('URL matches Bacon-fallback list; attempting Voltar first with Bacon as fallback');
+      const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
+      if (voltarResult.success) {
+        console.log('Voltar bypass successful for Bacon-fallback URL');
+        return;
+      }
+      console.log('Voltar failed/unsupported; attempting Bacon fallback');
+      const baconRes = await tryBacon(axios, url, incomingUserId, res, handlerStart);
+      if (baconRes.success) {
+        console.log('Bacon bypass successful as fallback');
+        return;
+      }
+      console.error('All bypass methods failed (Bacon-fallback flow)');
+      return sendError(res, 500, 'Bypass Failed :(', handlerStart);
+    }
+
+    console.log('Attempting Voltar bypass (default flow)');
+    const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
+
+    if (voltarResult.success) {
+      console.log('Voltar bypass successful (default flow)');
+      return;
+    }
+
+    console.error('All bypass methods failed (default flow)');
+    return sendError(res, 500, 'Bypass Failed :(', handlerStart);
+
+  } catch (err) {
+    console.error('Unexpected error in handler flow: ' + (err?.message || String(err)));
+    return sendError(res, 500, `Internal handler error: ${String(err?.message || err)}`, handlerStart);
   }
-
-  console.error('All bypass methods failed');
-  return sendError(res, 500, 'Bypass Failed :(', handlerStart);
 };
