@@ -14,6 +14,10 @@ const CONFIG = {
   SUPPORTED_METHODS: ['GET', 'POST']
 };
 
+const TRW_BASE = 'https://trw.lat/api/bypass';
+const TRW_KEY = 'TRW_FREE-GAY-15a92945-9b04-4c75-8337-f2a6007281e9';
+const TRW_TIMEOUT = 90000;
+
 const BACON_BASE = 'https://free.baconbypass.online';
 const BACON_KEY = '9d94a66be3d84725422290841a93da785ecf26d47ce62f92';
 const BACON_TIMEOUT = 120000;
@@ -66,9 +70,6 @@ const BACON_FIRST_LIST = [
 ].map(s => s.toLowerCase());
 
 const BACON_FALLBACK_LIST = [
-  'https://auth.platoboost.app/',
-  'https://auth.platoboost.me/',
-  'https://auth.platorelay.com',
   'https://link-center.net/',
   'https://link-hub.net/',
   'https://link-target.net/',
@@ -198,6 +199,51 @@ const tryVoltar = async (axios, url, incomingUserId, res, handlerStart) => {
   } catch (e) {
     if (e?.response?.data?.message && /unsupported|invalid|not supported/i.test(e.response.data.message)) {
       return { success: false, unsupported: true };
+    }
+    return { success: false };
+  }
+};
+
+const tryTRW = async (axios, url, incomingUserId, res, handlerStart) => {
+  const start = getCurrentTime();
+  try {
+    const requestUrl = `${TRW_BASE}?url=${encodeURIComponent(url)}`;
+    const r = await axios.get(requestUrl, { headers: { 'x-api-key': TRW_KEY }, timeout: TRW_TIMEOUT });
+    const data = r?.data || {};
+    const successFlag = data.success === true || String(data.success).toLowerCase() === 'true';
+    let candidateResult = '';
+    if (typeof data.result === 'string' && data.result) {
+      candidateResult = data.result;
+    } else if (data.result && typeof data.result === 'object') {
+      if (typeof data.result.result === 'string' && data.result.result) {
+        candidateResult = data.result.result;
+      } else if (typeof data.result.destination === 'string' && data.result.destination) {
+        candidateResult = data.result.destination;
+      } else if (typeof data.result.url === 'string' && data.result.url) {
+        candidateResult = data.result.url;
+      }
+    } else if (typeof data.destination === 'string' && data.destination) {
+      candidateResult = data.destination;
+    } else if (typeof data.url === 'string' && data.url) {
+      candidateResult = data.url;
+    }
+
+    if (successFlag && candidateResult) {
+      sendSuccess(res, candidateResult, incomingUserId, start);
+      return { success: true };
+    }
+
+    if (data.success === false && typeof data.message === 'string' && data.message) {
+      sendError(res, 500, data.message, start);
+      return { success: false, handled: true };
+    }
+
+    return { success: false };
+  } catch (e) {
+    const errMsg = e?.response?.data;
+    if (errMsg && typeof errMsg === 'object' && typeof errMsg.message === 'string') {
+      sendError(res, 500, errMsg.message, start);
+      return { success: false, handled: true };
     }
     return { success: false };
   }
@@ -352,16 +398,59 @@ module.exports = async (req, res) => {
     return sendError(res, 400, 'Invalid URL', handlerStart);
   }
   const incomingUserId = getUserId(req);
+
   if (hostname === 'paste.to' || hostname.endsWith('.paste.to')) {
     return await handlePasteTo(axios, url, incomingUserId, handlerStart, res);
   }
   if (hostname === 'get-key.keysystem2352.workers.dev' || hostname === 'get-key.keysystem352.workers.dev') {
     return await handleKeySystem(axios, url, incomingUserId, handlerStart, res);
   }
+
   const urlLower = url.toLowerCase();
   const isBaconFirst = BACON_FIRST_LIST.some(prefix => urlLower.startsWith(prefix));
   const isBaconFallback = baconFallbackHosts.some(h => hostname === h || hostname.endsWith('.' + h) || urlLower.includes(h));
+
   try {
+    if (urlLower.startsWith('https://loot')) {
+      const trwRes = await tryTRW(axios, url, incomingUserId, res, handlerStart);
+      if (trwRes.success) return;
+      if (trwRes.handled) return;
+      return sendError(res, 500, 'Bypass Failed :(', handlerStart);
+    }
+
+    if (urlLower.includes('linkvertise.com') || hostname === 'linkvertise.com' || hostname.endsWith('.linkvertise.com')) {
+      const trwRes = await tryTRW(axios, url, incomingUserId, res, handlerStart);
+      if (trwRes.success) return;
+      if (trwRes.handled) return;
+      const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
+      if (voltarResult.success) return;
+      const baconRes = await tryBacon(axios, url, incomingUserId, res, handlerStart);
+      if (baconRes.success) return;
+      if (baconRes.handled) return;
+      return sendError(res, 500, 'Bypass Failed :(', handlerStart);
+    }
+
+    if (urlLower.includes('cuty.io') || hostname === 'cuty.io' || hostname.endsWith('.cuty.io')) {
+      const trwRes = await tryTRW(axios, url, incomingUserId, res, handlerStart);
+      if (trwRes.success) return;
+      if (trwRes.handled) return;
+      const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
+      if (voltarResult.success) return;
+      return sendError(res, 500, 'Bypass Failed :(', handlerStart);
+    }
+
+    if (urlLower.includes('work.ink') || hostname === 'work.ink' || hostname.endsWith('.work.ink')) {
+      const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
+      if (voltarResult.success) return;
+      const trwRes = await tryTRW(axios, url, incomingUserId, res, handlerStart);
+      if (trwRes.success) return;
+      if (trwRes.handled) return;
+      const baconRes = await tryBacon(axios, url, incomingUserId, res, handlerStart);
+      if (baconRes.success) return;
+      if (baconRes.handled) return;
+      return sendError(res, 500, 'Bypass Failed :(', handlerStart);
+    }
+
     if (isBaconFirst) {
       const baconRes = await tryBacon(axios, url, incomingUserId, res, handlerStart);
       if (baconRes.success) {
@@ -376,6 +465,7 @@ module.exports = async (req, res) => {
       }
       return sendError(res, 500, 'Bypass Failed :(', handlerStart);
     }
+
     if (isBaconFallback) {
       const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
       if (voltarResult.success) {
@@ -390,10 +480,20 @@ module.exports = async (req, res) => {
       }
       return sendError(res, 500, 'Bypass Failed :(', handlerStart);
     }
+
     const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
     if (voltarResult.success) {
       return;
     }
+
+    const trwRes = await tryTRW(axios, url, incomingUserId, res, handlerStart);
+    if (trwRes.success) return;
+    if (trwRes.handled) return;
+
+    const baconRes = await tryBacon(axios, url, incomingUserId, res, handlerStart);
+    if (baconRes.success) return;
+    if (baconRes.handled) return;
+
     return sendError(res, 500, 'Bypass Failed :(', handlerStart);
   } catch (err) {
     return sendError(res, 500, `Internal handler error: ${String(err?.message || err)}`, handlerStart);
