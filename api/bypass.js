@@ -230,17 +230,8 @@ const tryTRW = async (axios, url, incomingUserId, res, handlerStart) => {
       sendSuccess(res, candidateResult, incomingUserId, start);
       return { success: true };
     }
-    if (data.success === false && typeof data.message === 'string' && data.message) {
-      sendError(res, 500, data.message, start);
-      return { success: false, handled: true };
-    }
     return { success: false };
   } catch (e) {
-    const errMsg = e?.response?.data;
-    if (errMsg && typeof errMsg === 'object' && typeof errMsg.message === 'string') {
-      sendError(res, 500, errMsg.message, start);
-      return { success: false, handled: true };
-    }
     return { success: false };
   }
 };
@@ -405,34 +396,37 @@ module.exports = async (req, res) => {
   const urlLower = url.toLowerCase();
   const isBaconFirst = BACON_FIRST_LIST.some(prefix => urlLower.startsWith(prefix));
   const isBaconFallback = baconFallbackHosts.some(h => hostname === h || hostname.endsWith('.' + h) || urlLower.includes(h));
+  const trwHosts = ['linkvertise.com', 'cuty.io'];
 
   try {
     if (urlLower.startsWith('https://loot')) {
       const trwRes = await tryTRW(axios, url, incomingUserId, res, handlerStart);
       if (trwRes.success) return;
-      if (trwRes.handled) return;
       return sendError(res, 500, 'Bypass Failed :(', handlerStart);
     }
 
-    if (urlLower.includes('linkvertise.com') || hostname === 'linkvertise.com' || hostname.endsWith('.linkvertise.com')) {
+    if (hostname === 'linkvertise.com' || hostname.endsWith('.linkvertise.com') || urlLower.includes('linkvertise.com')) {
       const trwRes = await tryTRW(axios, url, incomingUserId, res, handlerStart);
       if (trwRes.success) return;
-      if (trwRes.handled) return;
+      const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
+      if (voltarResult.success) return;
+      if (isBaconFirst || isBaconFallback) {
+        const baconRes = await tryBacon(axios, url, incomingUserId, res, handlerStart);
+        if (baconRes.success) return;
+        if (baconRes.handled) return;
+      }
+      return sendError(res, 500, 'Bypass Failed :(', handlerStart);
+    }
+
+    if (hostname === 'cuty.io' || hostname.endsWith('.cuty.io') || urlLower.includes('cuty.io')) {
+      const trwRes = await tryTRW(axios, url, incomingUserId, res, handlerStart);
+      if (trwRes.success) return;
       const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
       if (voltarResult.success) return;
       return sendError(res, 500, 'Bypass Failed :(', handlerStart);
     }
 
-    if (urlLower.includes('cuty.io') || hostname === 'cuty.io' || hostname.endsWith('.cuty.io')) {
-      const trwRes = await tryTRW(axios, url, incomingUserId, res, handlerStart);
-      if (trwRes.success) return;
-      if (trwRes.handled) return;
-      const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
-      if (voltarResult.success) return;
-      return sendError(res, 500, 'Bypass Failed :(', handlerStart);
-    }
-
-    if (urlLower.includes('work.ink') || hostname === 'work.ink' || hostname.endsWith('.work.ink')) {
+    if (hostname === 'work.ink' || hostname.endsWith('.work.ink') || urlLower.includes('work.ink')) {
       const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
       if (voltarResult.success) return;
       return sendError(res, 500, 'Bypass Failed :(', handlerStart);
@@ -440,31 +434,19 @@ module.exports = async (req, res) => {
 
     if (isBaconFirst) {
       const baconRes = await tryBacon(axios, url, incomingUserId, res, handlerStart);
-      if (baconRes.success) {
-        return;
-      }
-      if (baconRes.handled) {
-        return;
-      }
+      if (baconRes.success) return;
+      if (baconRes.handled) return;
       const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
-      if (voltarResult.success) {
-        return;
-      }
+      if (voltarResult.success) return;
       return sendError(res, 500, 'Bypass Failed :(', handlerStart);
     }
 
     if (isBaconFallback) {
       const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
-      if (voltarResult.success) {
-        return;
-      }
+      if (voltarResult.success) return;
       const baconRes = await tryBacon(axios, url, incomingUserId, res, handlerStart);
-      if (baconRes.success) {
-        return;
-      }
-      if (baconRes.handled) {
-        return;
-      }
+      if (baconRes.success) return;
+      if (baconRes.handled) return;
       return sendError(res, 500, 'Bypass Failed :(', handlerStart);
     }
 
