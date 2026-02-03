@@ -9,14 +9,10 @@ const CONFIG = {
   VOLTAR_BASE: 'https://api.voltar.lol',
   VOLTAR_API_KEY: '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa',
   MAX_POLL_ATTEMPTS: 90,
-  POLL_INTERVAL: 200,
+  POLL_INTERVAL: 100,
   POLL_TIMEOUT: 90000,
   SUPPORTED_METHODS: ['GET', 'POST']
 };
-
-const TRW_BASE = 'https://trw.lat/api/bypass';
-const TRW_KEY = 'TRW_FREE-GAY-15a92945-9b04-4c75-8337-f2a6007281e9';
-const TRW_TIMEOUT = 90000;
 
 const BACON_BASE = 'https://free.baconbypass.online';
 const BACON_KEY = '9d94a66be3d84725422290841a93da785ecf26d47ce62f92';
@@ -142,7 +138,7 @@ const pollTaskResult = async (axios, taskId, headers, startTime) => {
   const pollStart = Date.now();
   while (attempts < CONFIG.MAX_POLL_ATTEMPTS) {
     if (Date.now() - pollStart > CONFIG.POLL_TIMEOUT) {
-      return null;
+      return { status: 'timeout' };
     }
     if (attempts > 0) {
       await new Promise(r => setTimeout(r, CONFIG.POLL_INTERVAL));
@@ -152,22 +148,22 @@ const pollTaskResult = async (axios, taskId, headers, startTime) => {
       const resultRes = await axios.get(`${CONFIG.VOLTAR_BASE}/bypass/getTaskResult/${taskId}`, { headers, timeout: 0 });
       const data = resultRes?.data;
       if (!data) {
-        return null;
+        continue;
       }
       if (data.status === 'success' && data.result) {
-        return data.result;
+        return { status: 'success', result: data.result };
       }
       if (data.status === 'error' || data.status === 'failed' || data.error) {
-        return null;
+        return { status: 'error' };
       }
       if (data.message && /unsupported|invalid|not supported|failed/i.test(String(data.message))) {
-        return null;
+        return { status: 'unsupported' };
       }
     } catch (err) {
-      return null;
+      return { status: 'error' };
     }
   }
-  return null;
+  return { status: 'timeout' };
 };
 
 const tryVoltar = async (axios, url, incomingUserId, res, handlerStart) => {
@@ -181,58 +177,38 @@ const tryVoltar = async (axios, url, incomingUserId, res, handlerStart) => {
     const createPayload = { url, cache: true };
     if (incomingUserId) createPayload.x_user_id = incomingUserId;
     const createRes = await axios.post(`${CONFIG.VOLTAR_BASE}/bypass/createTask`, createPayload, { headers: voltarHeaders, timeout: 0 });
-    if (createRes?.data?.status !== 'success' || !createRes?.data?.taskId) {
-      return { success: false, unsupported: true };
+    const createData = createRes?.data || {};
+    if (createData.status === 'error') {
+      return { success: false, reason: 'error' };
     }
-    const taskId = createRes.data.taskId;
+    if (createData.status !== 'success' || !createData.taskId) {
+      return { success: false, reason: 'unsupported' };
+    }
+    const taskId = createData.taskId;
     const pollHeaders = {
       'x-api-key': voltarHeaders['x-api-key'],
       'x-user-id': voltarHeaders['x-user-id']
     };
-    const result = await pollTaskResult(axios, taskId, pollHeaders, start);
-    if (result) {
-      sendSuccess(res, result, incomingUserId, start);
+    const pollRes = await pollTaskResult(axios, taskId, pollHeaders, start);
+    if (!pollRes) {
+      return { success: false, reason: 'error' };
+    }
+    if (pollRes.status === 'success') {
+      sendSuccess(res, pollRes.result, incomingUserId, start);
       return { success: true };
     }
-    return { success: false };
+    if (pollRes.status === 'unsupported') {
+      return { success: false, reason: 'unsupported' };
+    }
+    if (pollRes.status === 'timeout') {
+      return { success: false, reason: 'error' };
+    }
+    return { success: false, reason: 'error' };
   } catch (e) {
     if (e?.response?.data?.message && /unsupported|invalid|not supported/i.test(e.response.data.message)) {
-      return { success: false, unsupported: true };
+      return { success: false, reason: 'unsupported' };
     }
-    return { success: false };
-  }
-};
-
-const tryTRW = async (axios, url, incomingUserId, res, handlerStart) => {
-  const start = getCurrentTime();
-  try {
-    const requestUrl = `${TRW_BASE}?url=${encodeURIComponent(url)}`;
-    const r = await axios.get(requestUrl, { headers: { 'x-api-key': TRW_KEY }, timeout: TRW_TIMEOUT });
-    const data = r?.data || {};
-    const successFlag = data.success === true || String(data.success).toLowerCase() === 'true';
-    let candidateResult = '';
-    if (typeof data.result === 'string' && data.result) {
-      candidateResult = data.result;
-    } else if (data.result && typeof data.result === 'object') {
-      if (typeof data.result.result === 'string' && data.result.result) {
-        candidateResult = data.result.result;
-      } else if (typeof data.result.destination === 'string' && data.result.destination) {
-        candidateResult = data.result.destination;
-      } else if (typeof data.result.url === 'string' && data.result.url) {
-        candidateResult = data.result.url;
-      }
-    } else if (typeof data.destination === 'string' && data.destination) {
-      candidateResult = data.destination;
-    } else if (typeof data.url === 'string' && data.url) {
-      candidateResult = data.url;
-    }
-    if (successFlag && candidateResult) {
-      sendSuccess(res, candidateResult, incomingUserId, start);
-      return { success: true };
-    }
-    return { success: false };
-  } catch (e) {
-    return { success: false };
+    return { success: false, reason: 'error' };
   }
 };
 
@@ -398,64 +374,13 @@ module.exports = async (req, res) => {
   const isBaconFallback = baconFallbackHosts.some(h => hostname === h || hostname.endsWith('.' + h) || urlLower.includes(h));
 
   try {
-    if (hostname === 'linkvertise.com' || hostname.endsWith('.linkvertise.com') || urlLower.includes('linkvertise.com')) {
-      const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
-      if (voltarResult.success) return;
-      if (isBaconFirst || isBaconFallback) {
-        const baconRes = await tryBacon(axios, url, incomingUserId, res, handlerStart);
-        if (baconRes.success) return;
-        if (baconRes.handled) return;
-      }
-      const trwRes = await tryTRW(axios, url, incomingUserId, res, handlerStart);
-      if (trwRes.success) return;
-      return sendError(res, 500, 'Bypass Failed :(', handlerStart);
-    }
-
-    if (hostname === 'cuty.io' || hostname.endsWith('.cuty.io') || urlLower.includes('cuty.io')) {
-      const trwRes = await tryTRW(axios, url, incomingUserId, res, handlerStart);
-      if (trwRes.success) return;
-      const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
-      if (voltarResult.success) return;
-      return sendError(res, 500, 'Bypass Failed :(', handlerStart);
-    }
-
-    if (hostname === 'work.ink' || hostname.endsWith('.work.ink') || urlLower.includes('work.ink')) {
-      const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
-      if (voltarResult.success) return;
-      return sendError(res, 500, 'Bypass Failed :(', handlerStart);
-    }
-
-    if (isBaconFirst) {
-      const baconRes = await tryBacon(axios, url, incomingUserId, res, handlerStart);
-      if (baconRes.success) return;
-      if (baconRes.handled) return;
-      const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
-      if (voltarResult.success) return;
-      return sendError(res, 500, 'Bypass Failed :(', handlerStart);
-    }
-
-    if (isBaconFallback) {
-      const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
-      if (voltarResult.success) return;
-      const baconRes = await tryBacon(axios, url, incomingUserId, res, handlerStart);
-      if (baconRes.success) return;
-      if (baconRes.handled) return;
-      return sendError(res, 500, 'Bypass Failed :(', handlerStart);
-    }
-
-    if (urlLower.startsWith('https://')) {
-      const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
-      if (voltarResult.success) {
-        return;
-      }
-      return sendError(res, 500, 'Bypass Failed :(', handlerStart);
-    }
-
     const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
-    if (voltarResult.success) {
-      return;
+    if (voltarResult.success) return;
+    if ((isBaconFirst || isBaconFallback) && (voltarResult.reason === 'error' || voltarResult.reason === 'timeout')) {
+      const baconRes = await tryBacon(axios, url, incomingUserId, res, handlerStart);
+      if (baconRes.success) return;
+      if (baconRes.handled) return;
     }
-
     return sendError(res, 500, 'Bypass Failed :(', handlerStart);
   } catch (err) {
     return sendError(res, 500, `Internal handler error: ${String(err?.message || err)}`, handlerStart);
