@@ -6,7 +6,7 @@ const formatDuration = (startNs, endNs = process.hrtime.bigint()) => {
 };
 
 const CONFIG = {
-  VOLTAR_BASE: 'https://api.voltar.lol',
+  VOLTAR_BASE: 'http://77.110.121.76:3000',
   VOLTAR_API_KEY: '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa',
   MAX_POLL_ATTEMPTS: 90,
   POLL_INTERVAL: 100,
