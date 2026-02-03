@@ -14,91 +14,64 @@ const CONFIG = {
   SUPPORTED_METHODS: ['GET', 'POST']
 };
 
-const BACON_BASE = 'https://free.baconbypass.online';
-const BACON_KEY = '9d94a66be3d84725422290841a93da785ecf26d47ce62f92';
+const BACON_API = 'https://free.baconbypass.online/bypass';
+const BACON_API_KEY = '9d94a66be3d84725422290841a93da785ecf26d47ce62f92';
 const BACON_TIMEOUT = 120000;
-const BACON_RATE_WINDOW_MS = 7000;
-const BACON_RATE_MAX = 3;
 
-const BACON_FIRST_LIST = [
-  'https://adfoc.us/',
-  'https://blog.tapvietcode.com/',
-  'https://blox-script.com/get-key',
-  'https://blox-script.com/subscribe',
-  'https://boost.ink/',
-  'https://bst.gg/',
-  'https://bstshrt.com/',
-  'https://deltaios-executor.com/',
-  'https://go.linkify.ru/',
-  'https://krnl-ios.com/',
-  'https://ldnesfspublic.org/',
-  'https://link-unlock.com/',
-  'https://link4sub.com/',
-  'https://linkunlocker.com/',
-  'https://linkzy.space/',
-  'https://mboost.me/',
-  'https://mendationforc.info/',
-  'https://neoxsoftworks.eu/',
-  'https://nirbytes.com/sub2unlock/',
-  'https://ntt-hub.xyz/key/get-key?hwid=',
-  'https://ntt-hub.xyz/key/ntt-hub.html?hwid=',
-  'https://paste-drop.com/',
-  'https://pastebin.com/',
-  'https://pastefy.app/',
-  'https://rekonise.com/',
-  'https://rekonise.org/',
-  'https://rkns.link/',
-  'https://robloxscripts.gg/',
-  'https://scriptpastebins.com/',
-  'https://smplu.link/Keysystem',
-  'https://social-unlock.com/',
-  'https://socialwolvez.com/',
-  'https://sub2get.com/',
-  'https://sub2unlock.com/',
-  'https://sub2unlock.io/',
-  'https://sub2unlock.me/',
-  'https://sub2unlock.top/',
-  'https://sub4unlock.co/',
-  'https://sub4unlock.com/',
-  'https://sub4unlock.pro/',
-  'https://subnise.com/link/',
-  'https://www.jinkx.pro/'
-].map(s => s.toLowerCase());
+const primaryHosts = new Set([
+  'adfoc.us',
+  'blog.tapvietcode.com',
+  'blox-script.com',
+  'boost.ink',
+  'bst.gg',
+  'bstshrt.com',
+  'deltaios-executor.com',
+  'go.linkify.ru',
+  'krnl-ios.com',
+  'ldnesfspublic.org',
+  'link-unlock.com',
+  'link4sub.com',
+  'linkunlocker.com',
+  'linkzy.space',
+  'mboost.me',
+  'mendationforc.info',
+  'neoxsoftworks.eu',
+  'nirbytes.com',
+  'ntt-hub.xyz',
+  'paste-drop.com',
+  'pastebin.com',
+  'pastefy.app',
+  'rekonise.com',
+  'rekonise.org',
+  'rkns.link',
+  'robloxscripts.gg',
+  'scriptpastebins.com',
+  'smplu.link',
+  'social-unlock.com',
+  'socialwolvez.com',
+  'sub2get.com',
+  'sub2unlock.com',
+  'sub2unlock.io',
+  'sub2unlock.me',
+  'sub2unlock.top',
+  'sub4unlock.co',
+  'sub4unlock.com',
+  'sub4unlock.pro',
+  'subnise.com',
+  'www.jinkx.pro'
+]);
 
-const BACON_FALLBACK_LIST = [
-  'https://link-center.net/',
-  'https://link-hub.net/',
-  'https://link-target.net/',
-  'https://link-to.net/',
-  'https://direct-link.net/'
-].map(s => s.toLowerCase());
-
-const baconFallbackHosts = BACON_FALLBACK_LIST.map(u => {
-  try {
-    return new URL(u).hostname.toLowerCase();
-  } catch {
-    return u.replace(/^https?:\/\//i, '').replace(/\/.*$/, '').toLowerCase();
-  }
-});
-
-let baconCallTimestamps = [];
-
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-const ensureBaconRateLimit = async () => {
-  const now = Date.now();
-  baconCallTimestamps = baconCallTimestamps.filter(ts => now - ts < BACON_RATE_WINDOW_MS);
-  if (baconCallTimestamps.length < BACON_RATE_MAX) {
-    baconCallTimestamps.push(now);
-    return;
-  }
-  const earliest = baconCallTimestamps[0];
-  const waitMs = BACON_RATE_WINDOW_MS - (now - earliest) + 10;
-  await sleep(waitMs);
-  const afterNow = Date.now();
-  baconCallTimestamps = baconCallTimestamps.filter(ts => afterNow - ts < BACON_RATE_WINDOW_MS);
-  baconCallTimestamps.push(afterNow);
-};
+const fallbackHosts = new Set([
+  'auth.platoboost.app',
+  'auth.platoboost.me',
+  'auth.platorelay.com',
+  'link-center.net',
+  'link-hub.net',
+  'link-target.net',
+  'link-to.net',
+  'direct-link.net',
+  'linkvertise.com'
+]);
 
 const sendError = (res, statusCode, message, startTime) => {
   return res.status(statusCode).json({
@@ -136,126 +109,138 @@ const extractHostname = (url) => {
 const pollTaskResult = async (axios, taskId, headers, startTime) => {
   let attempts = 0;
   const pollStart = Date.now();
+
   while (attempts < CONFIG.MAX_POLL_ATTEMPTS) {
     if (Date.now() - pollStart > CONFIG.POLL_TIMEOUT) {
-      return { status: 'timeout' };
+      console.error('Polling timeout reached after ' + attempts + ' attempts');
+      return null;
     }
+
     if (attempts > 0) {
       await new Promise(r => setTimeout(r, CONFIG.POLL_INTERVAL));
     }
     attempts++;
+
     try {
-      const resultRes = await axios.get(`${CONFIG.VOLTAR_BASE}/bypass/getTaskResult/${taskId}`, { headers, timeout: 0 });
+      const resultRes = await axios.get(
+        `${CONFIG.VOLTAR_BASE}/bypass/getTaskResult/${taskId}`,
+        { headers, timeout: 0 }
+      );
+
       const data = resultRes?.data;
+
       if (!data) {
-        continue;
+        console.error(`Voltar returned empty response on attempt ${attempts}`);
+        return null;
       }
+
       if (data.status === 'success' && data.result) {
-        return { status: 'success', result: data.result };
+        return data.result;
       }
+
       if (data.status === 'error' || data.status === 'failed' || data.error) {
-        return { status: 'error' };
+        console.error(`Voltar task error (attempt ${attempts}): ${data.message || JSON.stringify(data)}`);
+        return null;
       }
+
       if (data.message && /unsupported|invalid|not supported|failed/i.test(String(data.message))) {
-        return { status: 'unsupported' };
+        console.error(`Voltar task terminal message (attempt ${attempts}): ${data.message}`);
+        return null;
       }
+
     } catch (err) {
-      return { status: 'error' };
+      console.error(`Polling aborted due to error on attempt ${attempts}: ${err?.message || String(err)}`);
+      return null;
     }
   }
-  return { status: 'timeout' };
+
+  console.error('Max polling attempts reached: ' + CONFIG.MAX_POLL_ATTEMPTS);
+  return null;
 };
 
 const tryVoltar = async (axios, url, incomingUserId, res, handlerStart) => {
   const start = getCurrentTime();
+
   const voltarHeaders = {
     'x-user-id': incomingUserId || '',
     'x-api-key': CONFIG.VOLTAR_API_KEY,
     'Content-Type': 'application/json'
   };
+
   try {
     const createPayload = { url, cache: true };
     if (incomingUserId) createPayload.x_user_id = incomingUserId;
-    const createRes = await axios.post(`${CONFIG.VOLTAR_BASE}/bypass/createTask`, createPayload, { headers: voltarHeaders, timeout: 0 });
-    const createData = createRes?.data || {};
-    if (createData.status === 'error') {
-      return { success: false, reason: 'error' };
+
+    const createRes = await axios.post(
+      `${CONFIG.VOLTAR_BASE}/bypass/createTask`,
+      createPayload,
+      { headers: voltarHeaders, timeout: 0 }
+    );
+
+    if (createRes?.data?.status !== 'success' || !createRes?.data?.taskId) {
+      console.error('Voltar createTask failed or unsupported');
+      return { success: false, unsupported: true };
     }
-    if (createData.status !== 'success' || !createData.taskId) {
-      return { success: false, reason: 'unsupported' };
-    }
-    const taskId = createData.taskId;
+
+    const taskId = createRes.data.taskId;
+    console.log('Voltar task created: ' + taskId);
+
     const pollHeaders = {
       'x-api-key': voltarHeaders['x-api-key'],
       'x-user-id': voltarHeaders['x-user-id']
     };
-    const pollRes = await pollTaskResult(axios, taskId, pollHeaders, start);
-    if (!pollRes) {
-      return { success: false, reason: 'error' };
-    }
-    if (pollRes.status === 'success') {
-      sendSuccess(res, pollRes.result, incomingUserId, start);
+
+    const result = await pollTaskResult(axios, taskId, pollHeaders, start);
+
+    if (result) {
+      sendSuccess(res, result, incomingUserId, start);
       return { success: true };
     }
-    if (pollRes.status === 'unsupported') {
-      return { success: false, reason: 'unsupported' };
-    }
-    if (pollRes.status === 'timeout') {
-      return { success: false, reason: 'error' };
-    }
-    return { success: false, reason: 'error' };
+
+    console.error('Voltar polling failed to get result');
+    return { success: false };
+
   } catch (e) {
+    console.error('Voltar error: ' + (e?.message || String(e)));
     if (e?.response?.data?.message && /unsupported|invalid|not supported/i.test(e.response.data.message)) {
-      return { success: false, reason: 'unsupported' };
+      return { success: false, unsupported: true };
     }
-    return { success: false, reason: 'error' };
+    return { success: false };
   }
 };
 
 const tryBacon = async (axios, url, incomingUserId, res, handlerStart) => {
   const start = getCurrentTime();
+
   try {
-    await ensureBaconRateLimit();
-    const requestUrl = `${BACON_BASE}/bypass?url=${encodeURIComponent(url)}`;
-    const r = await axios.get(requestUrl, { headers: { 'x-api-key': BACON_KEY }, timeout: BACON_TIMEOUT });
-    const data = r?.data || {};
-    const statusString = String(data.status || '').toLowerCase();
-    let candidateResult = '';
-    if (typeof data.result === 'string' && data.result) {
-      candidateResult = data.result;
-    } else if (data.result && typeof data.result === 'object') {
-      if (typeof data.result.result === 'string' && data.result.result) {
-        candidateResult = data.result.result;
-      } else if (typeof data.result.destination === 'string' && data.result.destination) {
-        candidateResult = data.result.destination;
+    const baconRes = await axios.get(
+      `${BACON_API}?url=${encodeURIComponent(url)}`,
+      {
+        headers: {
+          'x-api-key': BACON_API_KEY
+        },
+        timeout: BACON_TIMEOUT
       }
-    } else if (typeof data.destination === 'string' && data.destination) {
-      candidateResult = data.destination;
-    } else if (typeof data.url === 'string' && data.url) {
-      candidateResult = data.url;
-    }
-    if (statusString === 'success' && candidateResult) {
-      sendSuccess(res, candidateResult, incomingUserId, start);
+    );
+
+    const data = baconRes.data;
+
+    if (data.status === 'success' && data.result) {
+      sendSuccess(res, data.result, incomingUserId, start);
       return { success: true };
+    } else {
+      console.error('Bacon failed: ' + (data.message || 'Unknown error'));
+      return { success: false };
     }
-    if (statusString === 'error') {
-      const msg = typeof data.message === 'string' && data.message ? data.message : 'Bacon bypass error';
-      sendError(res, 500, msg, start);
-      return { success: false, handled: true };
-    }
-    return { success: false };
   } catch (e) {
-    if (e?.response?.data && typeof e.response.data === 'object' && String(e.response.data.status || '').toLowerCase() === 'error' && typeof e.response.data.message === 'string') {
-      const msg = e.response.data.message;
-      sendError(res, 500, msg, start);
-      return { success: false, handled: true };
-    }
+    console.error('Bacon error: ' + (e?.message || String(e)));
     return { success: false };
   }
 };
 
 const handlePasteTo = async (axios, url, incomingUserId, handlerStart, res) => {
   const start = getCurrentTime();
+
   try {
     let parsed;
     try {
@@ -263,10 +248,13 @@ const handlePasteTo = async (axios, url, incomingUserId, handlerStart, res) => {
     } catch {
       parsed = null;
     }
+
     const key = parsed && parsed.hash ? parsed.hash.slice(1) : (url.split('#')[1] || '');
+
     if (!key) {
       return sendError(res, 400, 'Missing paste key', handlerStart);
     }
+
     let jsonUrl;
     if (parsed) {
       const tmp = new URL(parsed.toString());
@@ -275,45 +263,67 @@ const handlePasteTo = async (axios, url, incomingUserId, handlerStart, res) => {
     } else {
       jsonUrl = url.split('#')[0];
     }
-    const r = await axios.get(jsonUrl, { headers: { Accept: 'application/json, text/javascript, */*; q=0.01' }, timeout: 0 });
+
+    const r = await axios.get(jsonUrl, {
+      headers: { Accept: 'application/json, text/javascript, */*; q=0.01' },
+      timeout: 0
+    });
+
     const data = r.data;
+
     if (!data || !data.ct || !data.adata) {
       return sendError(res, 500, 'Paste data not found', handlerStart);
     }
+
     let lib;
     try {
       lib = await import('privatebin-decrypt');
     } catch {
       lib = require('privatebin-decrypt');
     }
+
     const decryptFn = lib.decryptPrivateBin || lib.default?.decryptPrivateBin || lib.default || lib;
+
     if (typeof decryptFn !== 'function') {
       return sendError(res, 500, 'privatebin-decrypt export not recognized', handlerStart);
     }
+
     let decrypted;
     try {
       decrypted = await decryptFn({ key, data: data.adata, cipherMessage: data.ct });
     } catch (e) {
       return sendError(res, 500, `Decryption failed: ${String(e?.message || e)}`, handlerStart);
     }
+
     return sendSuccess(res, decrypted, incomingUserId, start);
+
   } catch (e) {
+    console.error('Paste.to handling error: ' + (e?.message || String(e)));
     return sendError(res, 500, `Paste.to handling failed: ${String(e?.message || e)}`, handlerStart);
   }
 };
 
 const handleKeySystem = async (axios, url, incomingUserId, handlerStart, res) => {
   const start = getCurrentTime();
+
   try {
-    const r = await axios.get(url, { headers: { Accept: 'text/html,*/*' }, timeout: 0 });
+    const r = await axios.get(url, {
+      headers: { Accept: 'text/html,*/*' },
+      timeout: 0
+    });
+
     const body = String(r.data || '');
     const match = body.match(/id=["']keyText["'][^>]*>\s*([\s\S]*?)\s*<\/div>/i);
+
     if (!match) {
       return sendError(res, 500, 'keyText not found', handlerStart);
     }
+
     const keyText = match[1].trim();
     return sendSuccess(res, keyText, incomingUserId, start);
+
   } catch (e) {
+    console.error('KeySystem handling error: ' + (e?.message || String(e)));
     return sendError(res, 500, `Key fetch failed: ${String(e?.message || e)}`, handlerStart);
   }
 };
@@ -321,12 +331,14 @@ const handleKeySystem = async (axios, url, incomingUserId, handlerStart, res) =>
 const setCorsHeaders = (req, res) => {
   const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['*'];
   const origin = req.headers.origin;
+
   if (allowedOrigins.includes('*')) {
     res.setHeader('Access-Control-Allow-Origin', '*');
   } else if (origin && allowedOrigins.includes(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
   }
+
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,x-user-id,x_user_id,x-userid,x-api-key');
 };
@@ -338,51 +350,99 @@ const sanitizeUrl = (url) => {
 
 module.exports = async (req, res) => {
   const handlerStart = getCurrentTime();
+
+  console.log(`[${new Date().toISOString()}] ${req.method} request received`);
+
   setCorsHeaders(req, res);
+
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
+
   if (!CONFIG.SUPPORTED_METHODS.includes(req.method)) {
+    console.error('Method not allowed: ' + req.method);
     return sendError(res, 405, 'Method not allowed', handlerStart);
   }
+
   let url = req.method === 'GET' ? req.query.url : req.body?.url;
+
   if (!url || typeof url !== 'string') {
+    console.error('Missing or invalid url parameter');
     return sendError(res, 400, 'Missing url parameter', handlerStart);
   }
+
   url = sanitizeUrl(url);
+
   let axios;
   try {
     axios = require('axios');
   } catch {
+    console.error('axios module missing');
     return sendError(res, 500, 'axios missing', handlerStart);
   }
+
   const hostname = extractHostname(url);
+
   if (!hostname) {
+    console.error('Invalid URL provided: ' + url);
     return sendError(res, 400, 'Invalid URL', handlerStart);
   }
+
+  console.log('Processing URL with hostname: ' + hostname);
+
   const incomingUserId = getUserId(req);
 
+  let isPrimaryBacon = primaryHosts.has(hostname);
+  if (isPrimaryBacon) {
+    if (hostname === 'blox-script.com' && !url.includes('/get-key') && !url.includes('/subscribe')) isPrimaryBacon = false;
+    if (hostname === 'nirbytes.com' && !url.includes('/sub2unlock/')) isPrimaryBacon = false;
+    if (hostname === 'ntt-hub.xyz' && !url.includes('/key/')) isPrimaryBacon = false;
+    if (hostname === 'smplu.link' && !url.includes('/Keysystem')) isPrimaryBacon = false;
+    if (hostname === 'subnise.com' && !url.includes('/link/')) isPrimaryBacon = false;
+  }
+
+  const isFallbackBacon = fallbackHosts.has(hostname);
+
   if (hostname === 'paste.to' || hostname.endsWith('.paste.to')) {
+    console.log('Handling paste.to URL');
     return await handlePasteTo(axios, url, incomingUserId, handlerStart, res);
   }
+
   if (hostname === 'get-key.keysystem2352.workers.dev' || hostname === 'get-key.keysystem352.workers.dev') {
+    console.log('Handling keysystem URL');
     return await handleKeySystem(axios, url, incomingUserId, handlerStart, res);
   }
 
-  const urlLower = url.toLowerCase();
-  const isBaconFirst = BACON_FIRST_LIST.some(prefix => urlLower.startsWith(prefix));
-  const isBaconFallback = baconFallbackHosts.some(h => hostname === h || hostname.endsWith('.' + h) || urlLower.includes(h));
-
-  try {
-    const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
-    if (voltarResult.success) return;
-    if ((isBaconFirst || isBaconFallback) && (voltarResult.reason === 'error' || voltarResult.reason === 'timeout')) {
-      const baconRes = await tryBacon(axios, url, incomingUserId, res, handlerStart);
-      if (baconRes.success) return;
-      if (baconRes.handled) return;
+  if (isPrimaryBacon) {
+    console.log('Attempting Bacon bypass first');
+    const baconResult = await tryBacon(axios, url, incomingUserId, res, handlerStart);
+    if (baconResult.success) {
+      console.log('Bacon bypass successful');
+      return;
     }
-    return sendError(res, 500, 'Bypass Failed :(', handlerStart);
-  } catch (err) {
-    return sendError(res, 500, `Internal handler error: ${String(err?.message || err)}`, handlerStart);
+    console.log('Bacon failed, falling back to Voltar');
+    const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
+    if (voltarResult.success) {
+      console.log('Voltar bypass successful');
+      return;
+    }
+  } else {
+    console.log('Attempting Voltar bypass first');
+    const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
+    if (voltarResult.success) {
+      console.log('Voltar bypass successful');
+      return;
+    }
+    if (isFallbackBacon) {
+      console.log('Voltar failed, attempting Bacon as fallback');
+      const baconResult = await tryBacon(axios, url, incomingUserId, res, handlerStart);
+      if (baconResult.success) {
+        console.log('Bacon bypass successful');
+        return;
+      }
+    }
   }
+
+  console.error('All bypass methods failed');
+  return sendError(res, 500, 'Bypass Failed :(', handlerStart);
 };
