@@ -6,72 +6,13 @@ const formatDuration = (startNs, endNs = process.hrtime.bigint()) => {
 };
 
 const CONFIG = {
-  VOLTAR_BASE: 'http://77.110.121.76:3000',
+  VOLTAR_BASE: 'https://api.voltar.lol',
   VOLTAR_API_KEY: '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa',
   MAX_POLL_ATTEMPTS: 90,
   POLL_INTERVAL: 100,
   POLL_TIMEOUT: 90000,
   SUPPORTED_METHODS: ['GET', 'POST']
 };
-
-const BACON_API = 'https://free.baconbypass.online/bypass';
-const BACON_API_KEY = '9d94a66be3d84725422290841a93da785ecf26d47ce62f92';
-const BACON_TIMEOUT = 120000;
-
-const primaryHosts = new Set([
-  'adfoc.us',
-  'blog.tapvietcode.com',
-  'blox-script.com',
-  'boost.ink',
-  'bst.gg',
-  'bstshrt.com',
-  'deltaios-executor.com',
-  'go.linkify.ru',
-  'krnl-ios.com',
-  'ldnesfspublic.org',
-  'link-unlock.com',
-  'link4sub.com',
-  'linkunlocker.com',
-  'linkzy.space',
-  'mboost.me',
-  'mendationforc.info',
-  'neoxsoftworks.eu',
-  'nirbytes.com',
-  'ntt-hub.xyz',
-  'paste-drop.com',
-  'pastebin.com',
-  'pastefy.app',
-  'rekonise.com',
-  'rekonise.org',
-  'rkns.link',
-  'robloxscripts.gg',
-  'scriptpastebins.com',
-  'smplu.link',
-  'social-unlock.com',
-  'socialwolvez.com',
-  'sub2get.com',
-  'sub2unlock.com',
-  'sub2unlock.io',
-  'sub2unlock.me',
-  'sub2unlock.top',
-  'sub4unlock.co',
-  'sub4unlock.com',
-  'sub4unlock.pro',
-  'subnise.com',
-  'www.jinkx.pro'
-]);
-
-const fallbackHosts = new Set([
-  'auth.platoboost.app',
-  'auth.platoboost.me',
-  'auth.platorelay.com',
-  'link-center.net',
-  'link-hub.net',
-  'link-target.net',
-  'link-to.net',
-  'direct-link.net',
-  'linkvertise.com'
-]);
 
 const sendError = (res, statusCode, message, startTime) => {
   return res.status(statusCode).json({
@@ -205,35 +146,6 @@ const tryVoltar = async (axios, url, incomingUserId, res, handlerStart) => {
     if (e?.response?.data?.message && /unsupported|invalid|not supported/i.test(e.response.data.message)) {
       return { success: false, unsupported: true };
     }
-    return { success: false };
-  }
-};
-
-const tryBacon = async (axios, url, incomingUserId, res, handlerStart) => {
-  const start = getCurrentTime();
-
-  try {
-    const baconRes = await axios.get(
-      `${BACON_API}?url=${encodeURIComponent(url)}`,
-      {
-        headers: {
-          'x-api-key': BACON_API_KEY
-        },
-        timeout: BACON_TIMEOUT
-      }
-    );
-
-    const data = baconRes.data;
-
-    if (data.status === 'success' && data.result) {
-      sendSuccess(res, data.result, incomingUserId, start);
-      return { success: true };
-    } else {
-      console.error('Bacon failed: ' + (data.message || 'Unknown error'));
-      return { success: false };
-    }
-  } catch (e) {
-    console.error('Bacon error: ' + (e?.message || String(e)));
     return { success: false };
   }
 };
@@ -392,17 +304,6 @@ module.exports = async (req, res) => {
 
   const incomingUserId = getUserId(req);
 
-  let isPrimaryBacon = primaryHosts.has(hostname);
-  if (isPrimaryBacon) {
-    if (hostname === 'blox-script.com' && !url.includes('/get-key') && !url.includes('/subscribe')) isPrimaryBacon = false;
-    if (hostname === 'nirbytes.com' && !url.includes('/sub2unlock/')) isPrimaryBacon = false;
-    if (hostname === 'ntt-hub.xyz' && !url.includes('/key/')) isPrimaryBacon = false;
-    if (hostname === 'smplu.link' && !url.includes('/Keysystem')) isPrimaryBacon = false;
-    if (hostname === 'subnise.com' && !url.includes('/link/')) isPrimaryBacon = false;
-  }
-
-  const isFallbackBacon = fallbackHosts.has(hostname);
-
   if (hostname === 'paste.to' || hostname.endsWith('.paste.to')) {
     console.log('Handling paste.to URL');
     return await handlePasteTo(axios, url, incomingUserId, handlerStart, res);
@@ -413,34 +314,12 @@ module.exports = async (req, res) => {
     return await handleKeySystem(axios, url, incomingUserId, handlerStart, res);
   }
 
-  if (isPrimaryBacon) {
-    console.log('Attempting Bacon bypass first');
-    const baconResult = await tryBacon(axios, url, incomingUserId, res, handlerStart);
-    if (baconResult.success) {
-      console.log('Bacon bypass successful');
-      return;
-    }
-    console.log('Bacon failed, falling back to Voltar');
-    const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
-    if (voltarResult.success) {
-      console.log('Voltar bypass successful');
-      return;
-    }
-  } else {
-    console.log('Attempting Voltar bypass first');
-    const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
-    if (voltarResult.success) {
-      console.log('Voltar bypass successful');
-      return;
-    }
-    if (isFallbackBacon) {
-      console.log('Voltar failed, attempting Bacon as fallback');
-      const baconResult = await tryBacon(axios, url, incomingUserId, res, handlerStart);
-      if (baconResult.success) {
-        console.log('Bacon bypass successful');
-        return;
-      }
-    }
+  console.log('Attempting Voltar bypass');
+  const voltarResult = await tryVoltar(axios, url, incomingUserId, res, handlerStart);
+
+  if (voltarResult.success) {
+    console.log('Voltar bypass successful');
+    return;
   }
 
   console.error('All bypass methods failed');
