@@ -389,6 +389,10 @@ module.exports = async (req, res) => {
     return await handleKeySystem(axios, url, incomingUserId, handlerStart, res);
   }
 
+  const TRW_ONLY_HOSTS = ['work.ink', 'workink.net'];
+
+  const isTrwOnly = TRW_ONLY_HOSTS.some(h => hostname === h || hostname.endsWith('.' + h));
+
   const TRW_FIRST_HOSTS = ['linkvertise.com', 'loot', 'cuty.io', 'keyrblx.com'];
   const TRW_FALLBACK_HOSTS = ['rekonise', 'mboost.me', 'link-unlocker.com'];
 
@@ -397,6 +401,25 @@ module.exports = async (req, res) => {
 
   let voltarResult = { success: false };
   let trwResult = { success: false };
+
+  if (isTrwOnly) {
+    console.log('Host is TRW-only, attempting TRW and not attempting Voltar');
+    const trwHeaders = { 'x-api-key': TRW_CONFIG.API_KEY };
+
+    trwResult = await tryTrwBypass(axios, url, trwHeaders);
+
+    if (!trwResult.success) {
+      console.log('TRW primary failed on TRW-only host, attempting TRW v2 as fallback (still no Voltar).');
+      trwResult = await tryTrwV2Bypass(axios, url, trwHeaders);
+    }
+
+    if (trwResult.success) {
+      return sendSuccess(res, trwResult.result, incomingUserId, handlerStart);
+    }
+
+    console.error('TRW methods failed for TRW-only host; Voltar will not be attempted for this hostname');
+    return sendError(res, 500, 'Bypass Failed :(', handlerStart);
+  }
 
   if (isTrwFirst) {
     console.log('Attempting TRW first');
