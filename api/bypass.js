@@ -17,7 +17,8 @@ const TRW_CONFIG = {
 
 const RTAO_CONFIG = {
   BASE: 'https://rtao.lol',
-  PATH: '/free/v2/bypass'
+  PATH: '/free/v2/bypass',
+  API_KEY: 'RTaO_BtBKnXmuZPB0msCHlXyxS09ItC1yARpq'
 };
 
 const RTAO_ONLY_HOSTS = [
@@ -144,6 +145,9 @@ const tryRtaoBypass = async (axios, url) => {
   try {
     const res = await axios.get(`${RTAO_CONFIG.BASE}${RTAO_CONFIG.PATH}`, {
       params: { url },
+      headers: {
+        'x-api-key': RTAO_CONFIG.API_KEY
+      },
       timeout: 0
     });
     const data = res.data;
