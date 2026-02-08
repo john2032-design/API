@@ -34,11 +34,6 @@ const RTAO_ONLY_HOSTS = [
   'rekonise.com'
 ];
 
-const TRW_FIRST_RTAO_FALLBACK_HOSTS = [
-  'work.ink',
-  'workink.net'
-];
-
 const RTAO_FIRST_TRW_FALLBACK_HOSTS = [
   'linkvertise.com'
 ];
@@ -309,21 +304,6 @@ module.exports = async (req, res) => {
     return sendError(res, 500, 'Bypass Failed :(', handlerStart);
   }
 
-  if (matchesHostList(hostname, TRW_FIRST_RTAO_FALLBACK_HOSTS)) {
-    console.log('Host uses TRW first with RTAO fallback, attempting TRW');
-    const trwResult = await tryTrw(axios, url);
-    if (trwResult.success) {
-      return sendSuccess(res, trwResult.result, incomingUserId, handlerStart);
-    }
-    console.log('TRW failed, falling back to RTAO');
-    const rtaoResult = await tryRtaoBypass(axios, url);
-    if (rtaoResult.success) {
-      return sendSuccess(res, rtaoResult.result, incomingUserId, handlerStart);
-    }
-    console.error('All bypass methods failed for TRW then RTAO host');
-    return sendError(res, 500, 'Bypass Failed :(', handlerStart);
-  }
-
   if (matchesHostList(hostname, RTAO_FIRST_TRW_FALLBACK_HOSTS)) {
     console.log('Host uses RTAO first with TRW fallback, attempting RTAO');
     const rtaoResult = await tryRtaoBypass(axios, url);
@@ -339,7 +319,7 @@ module.exports = async (req, res) => {
     return sendError(res, 500, 'Bypass Failed :(', handlerStart);
   }
 
-  console.log('Host not in RTAO list, attempting TRW only');
+  console.log('Attempting TRW only');
   const trwResult = await tryTrw(axios, url);
   if (trwResult.success) {
     return sendSuccess(res, trwResult.result, incomingUserId, handlerStart);
