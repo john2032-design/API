@@ -6,29 +6,45 @@ const formatDuration = (startNs, endNs = process.hrtime.bigint()) => {
 };
 
 const CONFIG = {
-  VOLTAR_BASE: 'https://api.voltar.lol',
-  VOLTAR_API_KEY: '3f9c1e10-7f3e-4a67-939b-b42c18e4d7aa',
-  MAX_POLL_ATTEMPTS: 90,
-  POLL_INTERVAL: 100,
-  POLL_TIMEOUT: 90000,
   SUPPORTED_METHODS: ['GET', 'POST']
 };
 
 const TRW_CONFIG = {
   BASE: 'https://trw.lat',
   API_KEY: 'TRW_FREE-GAY-15a92945-9b04-4c75-8337-f2a6007281e9',
-  MAX_POLL_ATTEMPTS: 120,
-  POLL_INTERVAL: 500,
-  POLL_TIMEOUT: 60000
+  POLL_INTERVAL: 500
 };
 
 const RTAO_CONFIG = {
   BASE: 'https://rtao.lol',
-  PATH: '/free/v2/bypass',
-  MAX_POLL_ATTEMPTS: 60,
-  POLL_INTERVAL: 500,
-  POLL_TIMEOUT: 60000
+  PATH: '/free/v2/bypass'
 };
+
+const RTAO_ONLY_HOSTS = [
+  'auth.platorelay.com',
+  'auth.platoboost.me',
+  'auth.platoboost.app',
+  'shrinkme.click',
+  'link-hub.net',
+  'link-center.net',
+  'direct-link.net',
+  'link-target.net',
+  'up-to-down.net',
+  'rkns.link',
+  'rekonise.com'
+];
+
+const TRW_FIRST_RTAO_FALLBACK_HOSTS = [
+  'work.ink',
+  'workink.net'
+];
+
+const RTAO_FIRST_TRW_FALLBACK_HOSTS = [
+  'linkvertise.com'
+];
+
+const matchesHostList = (hostname, list) =>
+  list.some(h => hostname === h || hostname.endsWith('.' + h));
 
 const sendError = (res, statusCode, message, startTime) => {
   return res.status(statusCode).json({
@@ -63,87 +79,6 @@ const extractHostname = (url) => {
   }
 };
 
-const pollTaskResult = async (axios, taskId, headers, startTime) => {
-  let attempts = 0;
-  const pollStart = Date.now();
-  while (attempts < CONFIG.MAX_POLL_ATTEMPTS) {
-    if (Date.now() - pollStart > CONFIG.POLL_TIMEOUT) {
-      console.error('Polling timeout reached after ' + attempts + ' attempts');
-      return null;
-    }
-    if (attempts > 0) {
-      await new Promise(r => setTimeout(r, CONFIG.POLL_INTERVAL));
-    }
-    attempts++;
-    try {
-      const resultRes = await axios.get(
-        `${CONFIG.VOLTAR_BASE}/bypass/getTaskResult/${taskId}`,
-        { headers, timeout: 0 }
-      );
-      const data = resultRes?.data;
-      if (!data) {
-        console.error(`Voltar returned empty response on attempt ${attempts}`);
-        return null;
-      }
-      if (data.status === 'success' && data.result) {
-        return data.result;
-      }
-      if (data.status === 'error' || data.status === 'failed' || data.error) {
-        console.error(`Voltar task error (attempt ${attempts}): ${data.message || JSON.stringify(data)}`);
-        return null;
-      }
-      if (data.message && /unsupported|invalid|not supported|failed/i.test(String(data.message))) {
-        console.error(`Voltar task terminal message (attempt ${attempts}): ${data.message}`);
-        return null;
-      }
-    } catch (err) {
-      console.error(`Polling aborted due to error on attempt ${attempts}: ${err?.message || String(err)}`);
-      return null;
-    }
-  }
-  console.error('Max polling attempts reached: ' + CONFIG.MAX_POLL_ATTEMPTS);
-  return null;
-};
-
-const tryVoltar = async (axios, url, incomingUserId) => {
-  const voltarHeaders = {
-    'x-user-id': incomingUserId || '',
-    'x-api-key': CONFIG.VOLTAR_API_KEY,
-    'Content-Type': 'application/json'
-  };
-  try {
-    const createPayload = { url, cache: true };
-    if (incomingUserId) createPayload.x_user_id = incomingUserId;
-    const createRes = await axios.post(
-      `${CONFIG.VOLTAR_BASE}/bypass/createTask`,
-      createPayload,
-      { headers: voltarHeaders, timeout: 0 }
-    );
-    if (createRes?.data?.status !== 'success' || !createRes?.data?.taskId) {
-      console.error('Voltar createTask failed or unsupported');
-      return { success: false, unsupported: true };
-    }
-    const taskId = createRes.data.taskId;
-    console.log('Voltar task created: ' + taskId);
-    const pollHeaders = {
-      'x-api-key': voltarHeaders['x-api-key'],
-      'x-user-id': voltarHeaders['x-user-id']
-    };
-    const result = await pollTaskResult(axios, taskId, pollHeaders);
-    if (result) {
-      return { success: true, result };
-    }
-    console.error('Voltar polling failed to get result');
-    return { success: false };
-  } catch (e) {
-    console.error('Voltar error: ' + (e?.message || String(e)));
-    if (e?.response?.data?.message && /unsupported|invalid|not supported/i.test(e.response.data.message)) {
-      return { success: false, unsupported: true };
-    }
-    return { success: false };
-  }
-};
-
 const tryTrwBypass = async (axios, url, headers) => {
   try {
     const res = await axios.get(`${TRW_CONFIG.BASE}/api/bypass`, {
@@ -172,28 +107,26 @@ const tryTrwV2Bypass = async (axios, url, headers) => {
     const data = createRes.data;
     if (data.status === 'started' && data.ThreadID) {
       const taskId = data.ThreadID;
-      let attempts = 0;
-      const pollStart = Date.now();
-      while (attempts < TRW_CONFIG.MAX_POLL_ATTEMPTS) {
-        if (Date.now() - pollStart > TRW_CONFIG.POLL_TIMEOUT) {
-          console.error('TRW V2 polling timeout reached');
+      while (true) {
+        await new Promise(r => setTimeout(r, TRW_CONFIG.POLL_INTERVAL));
+        try {
+          const checkRes = await axios.get(`${TRW_CONFIG.BASE}/api/v2/threadcheck`, {
+            params: { id: taskId },
+            timeout: 0
+          });
+          const checkData = checkRes.data;
+          if (checkData.status === 'Done' && checkData.success && checkData.result) {
+            return { success: true, result: checkData.result };
+          }
+          if (checkData.status === 'error' || checkData.status === 'failed' || checkData.error) {
+            console.error('TRW V2 task failed: ' + (checkData.message || JSON.stringify(checkData)));
+            return { success: false };
+          }
+        } catch (pollErr) {
+          console.error('TRW V2 poll error: ' + (pollErr?.message || String(pollErr)));
           return { success: false };
         }
-        if (attempts > 0) {
-          await new Promise(r => setTimeout(r, TRW_CONFIG.POLL_INTERVAL));
-        }
-        attempts++;
-        const checkRes = await axios.get(`${TRW_CONFIG.BASE}/api/v2/threadcheck`, {
-          params: { id: taskId },
-          timeout: 0
-        });
-        const checkData = checkRes.data;
-        if (checkData.status === 'Done' && checkData.success && checkData.result) {
-          return { success: true, result: checkData.result };
-        }
       }
-      console.error('TRW V2 max polling attempts reached');
-      return { success: false };
     }
     return { success: false };
   } catch (e) {
@@ -202,11 +135,20 @@ const tryTrwV2Bypass = async (axios, url, headers) => {
   }
 };
 
-const tryRtaoBypass = async (axios, url, headers) => {
+const tryTrw = async (axios, url) => {
+  const trwHeaders = { 'x-api-key': TRW_CONFIG.API_KEY };
+  let result = await tryTrwBypass(axios, url, trwHeaders);
+  if (!result.success) {
+    console.log('TRW V1 failed, attempting TRW V2 as fallback');
+    result = await tryTrwV2Bypass(axios, url, trwHeaders);
+  }
+  return result;
+};
+
+const tryRtaoBypass = async (axios, url) => {
   try {
     const res = await axios.get(`${RTAO_CONFIG.BASE}${RTAO_CONFIG.PATH}`, {
       params: { url },
-      headers,
       timeout: 0
     });
     const data = res.data;
@@ -314,6 +256,7 @@ module.exports = async (req, res) => {
   const handlerStart = getCurrentTime();
   console.log(`[${new Date().toISOString()}] ${req.method} request received`);
   setCorsHeaders(req, res);
+
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
@@ -321,12 +264,14 @@ module.exports = async (req, res) => {
     console.error('Method not allowed: ' + req.method);
     return sendError(res, 405, 'Method not allowed', handlerStart);
   }
+
   let url = req.method === 'GET' ? req.query.url : req.body?.url;
   if (!url || typeof url !== 'string') {
     console.error('Missing or invalid url parameter');
     return sendError(res, 400, 'Missing url parameter', handlerStart);
   }
   url = sanitizeUrl(url);
+
   let axios;
   try {
     axios = require('axios');
@@ -334,98 +279,72 @@ module.exports = async (req, res) => {
     console.error('axios module missing');
     return sendError(res, 500, 'axios missing', handlerStart);
   }
+
   const hostname = extractHostname(url);
   if (!hostname) {
     console.error('Invalid URL provided: ' + url);
     return sendError(res, 400, 'Invalid URL', handlerStart);
   }
   console.log('Processing URL with hostname: ' + hostname);
+
   const incomingUserId = getUserId(req);
+
   if (hostname === 'paste.to' || hostname.endsWith('.paste.to')) {
     console.log('Handling paste.to URL');
     return await handlePasteTo(axios, url, incomingUserId, handlerStart, res);
   }
+
   if (hostname === 'get-key.keysystem2352.workers.dev' || hostname === 'get-key.keysystem352.workers.dev') {
     console.log('Handling keysystem URL');
     return await handleKeySystem(axios, url, incomingUserId, handlerStart, res);
   }
-  const TRW_ONLY_HOSTS = ['work.ink', 'workink.net'];
-  const RTAO_ONLY_HOSTS = ['shrinkme.click', 'link-hub.net', 'link-center.net', 'direct-link.net', 'link-target.net', 'linkvertise.com'];
-  const isTrwOnly = TRW_ONLY_HOSTS.some(h => hostname === h || hostname.endsWith('.' + h));
-  const isRtaoOnly = RTAO_ONLY_HOSTS.some(h => hostname === h || hostname.endsWith('.' + h));
-  const TRW_FIRST_HOSTS = ['linkvertise.com', 'loot', 'cuty.io', 'keyrblx.com'];
-  const TRW_FALLBACK_HOSTS = ['rekonise', 'mboost.me', 'link-unlocker.com'];
-  const isTrwFirst = TRW_FIRST_HOSTS.some(h => hostname.includes(h));
-  const isTrwFallback = TRW_FALLBACK_HOSTS.some(h => hostname.includes(h));
-  let voltarResult = { success: false };
-  let trwResult = { success: false };
-  let rtaoResult = { success: false };
-  if (isTrwOnly) {
-    console.log('Host is TRW-only, attempting TRW and not attempting Voltar or RTAO');
-    const trwHeaders = { 'x-api-key': TRW_CONFIG.API_KEY };
-    trwResult = await tryTrwBypass(axios, url, trwHeaders);
-    if (!trwResult.success) {
-      console.log('TRW primary failed on TRW-only host, attempting TRW v2 as fallback');
-      trwResult = await tryTrwV2Bypass(axios, url, trwHeaders);
+
+  if (matchesHostList(hostname, RTAO_ONLY_HOSTS)) {
+    console.log('Host is RTAO-only, attempting RTAO');
+    const rtaoResult = await tryRtaoBypass(axios, url);
+    if (rtaoResult.success) {
+      return sendSuccess(res, rtaoResult.result, incomingUserId, handlerStart);
     }
+    console.error('RTAO failed for RTAO-only host');
+    return sendError(res, 500, 'Bypass Failed :(', handlerStart);
+  }
+
+  if (matchesHostList(hostname, TRW_FIRST_RTAO_FALLBACK_HOSTS)) {
+    console.log('Host uses TRW first with RTAO fallback, attempting TRW');
+    const trwResult = await tryTrw(axios, url);
     if (trwResult.success) {
       return sendSuccess(res, trwResult.result, incomingUserId, handlerStart);
     }
-    console.error('TRW methods failed for TRW-only host; other services will not be attempted for this hostname');
-    return sendError(res, 500, 'Bypass Failed :(', handlerStart);
-  }
-  if (isRtaoOnly) {
-    console.log('Host is RTAO-only, attempting RTAO and not attempting Voltar or TRW');
-    const rtaoHeaders = {};
-    rtaoResult = await tryRtaoBypass(axios, url, rtaoHeaders);
+    console.log('TRW failed, falling back to RTAO');
+    const rtaoResult = await tryRtaoBypass(axios, url);
     if (rtaoResult.success) {
       return sendSuccess(res, rtaoResult.result, incomingUserId, handlerStart);
     }
-    console.error('RTAO failed for RTAO-only host; other services will not be attempted for this hostname');
+    console.error('All bypass methods failed for TRW then RTAO host');
     return sendError(res, 500, 'Bypass Failed :(', handlerStart);
   }
-  if (isTrwFirst) {
-    console.log('Attempting TRW first');
-    const trwHeaders = { 'x-api-key': TRW_CONFIG.API_KEY };
-    if (hostname.includes('keyrblx.com')) {
-      trwResult = await tryTrwV2Bypass(axios, url, trwHeaders);
-    } else {
-      trwResult = await tryTrwBypass(axios, url, trwHeaders);
+
+  if (matchesHostList(hostname, RTAO_FIRST_TRW_FALLBACK_HOSTS)) {
+    console.log('Host uses RTAO first with TRW fallback, attempting RTAO');
+    const rtaoResult = await tryRtaoBypass(axios, url);
+    if (rtaoResult.success) {
+      return sendSuccess(res, rtaoResult.result, incomingUserId, handlerStart);
     }
+    console.log('RTAO failed, falling back to TRW');
+    const trwResult = await tryTrw(axios, url);
     if (trwResult.success) {
       return sendSuccess(res, trwResult.result, incomingUserId, handlerStart);
     }
-    console.log('TRW failed, falling back to Voltar then RTAO');
-    voltarResult = await tryVoltar(axios, url, incomingUserId);
-    if (voltarResult.success) {
-      return sendSuccess(res, voltarResult.result, incomingUserId, handlerStart);
-    }
-    const rtaoHeaders = {};
-    rtaoResult = await tryRtaoBypass(axios, url, rtaoHeaders);
-    if (rtaoResult.success) {
-      return sendSuccess(res, rtaoResult.result, incomingUserId, handlerStart);
-    }
-  } else {
-    console.log('Attempting Voltar first');
-    voltarResult = await tryVoltar(axios, url, incomingUserId);
-    if (voltarResult.success) {
-      return sendSuccess(res, voltarResult.result, incomingUserId, handlerStart);
-    }
-    if (isTrwFallback) {
-      console.log('Voltar failed, attempting TRW as fallback');
-      const trwHeaders = { 'x-api-key': TRW_CONFIG.API_KEY };
-      trwResult = await tryTrwBypass(axios, url, trwHeaders);
-      if (trwResult.success) {
-        return sendSuccess(res, trwResult.result, incomingUserId, handlerStart);
-      }
-    }
-    console.log('Attempting RTAO as an additional fallback');
-    const rtaoHeaders = {};
-    rtaoResult = await tryRtaoBypass(axios, url, rtaoHeaders);
-    if (rtaoResult.success) {
-      return sendSuccess(res, rtaoResult.result, incomingUserId, handlerStart);
-    }
+    console.error('All bypass methods failed for RTAO then TRW host');
+    return sendError(res, 500, 'Bypass Failed :(', handlerStart);
   }
+
+  console.log('Host not in RTAO list, attempting TRW only');
+  const trwResult = await tryTrw(axios, url);
+  if (trwResult.success) {
+    return sendSuccess(res, trwResult.result, incomingUserId, handlerStart);
+  }
+
   console.error('All bypass methods failed');
   return sendError(res, 500, 'Bypass Failed :(', handlerStart);
 };
