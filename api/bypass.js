@@ -75,6 +75,13 @@ const extractHostname = (url) => {
   }
 };
 
+const wrapLuArmorResult = (maybeUrl) => {
+  if (typeof maybeUrl === 'string' && /^https?:\/\/ads\.luarmor\.net\//i.test(maybeUrl)) {
+    return `https://montelopiuy.pythonanywhere.com/redirect?to=${encodeURIComponent(maybeUrl)}`;
+  }
+  return maybeUrl;
+};
+
 const tryTrwBypass = async (axios, url, headers) => {
   try {
     const res = await axios.get(`${TRW_CONFIG.BASE}/api/bypass`, {
@@ -302,7 +309,8 @@ module.exports = async (req, res) => {
     console.log('Host is RTAO-only, attempting RTAO');
     const rtaoResult = await tryRtaoBypass(axios, url);
     if (rtaoResult.success) {
-      return sendSuccess(res, rtaoResult.result, incomingUserId, handlerStart);
+      const finalResult = wrapLuArmorResult(rtaoResult.result);
+      return sendSuccess(res, finalResult, incomingUserId, handlerStart);
     }
     console.error('RTAO failed for RTAO-only host');
     return sendError(res, 500, 'Bypass Failed :(', handlerStart);
@@ -312,12 +320,14 @@ module.exports = async (req, res) => {
     console.log('Host uses RTAO first with TRW fallback, attempting RTAO');
     const rtaoResult = await tryRtaoBypass(axios, url);
     if (rtaoResult.success) {
-      return sendSuccess(res, rtaoResult.result, incomingUserId, handlerStart);
+      const finalResult = wrapLuArmorResult(rtaoResult.result);
+      return sendSuccess(res, finalResult, incomingUserId, handlerStart);
     }
     console.log('RTAO failed, falling back to TRW');
     const trwResult = await tryTrw(axios, url);
     if (trwResult.success) {
-      return sendSuccess(res, trwResult.result, incomingUserId, handlerStart);
+      const finalResult = wrapLuArmorResult(trwResult.result);
+      return sendSuccess(res, finalResult, incomingUserId, handlerStart);
     }
     console.error('All bypass methods failed for RTAO then TRW host');
     return sendError(res, 500, 'Bypass Failed :(', handlerStart);
@@ -326,7 +336,8 @@ module.exports = async (req, res) => {
   console.log('Attempting TRW only');
   const trwResult = await tryTrw(axios, url);
   if (trwResult.success) {
-    return sendSuccess(res, trwResult.result, incomingUserId, handlerStart);
+    const finalResult = wrapLuArmorResult(trwResult.result);
+    return sendSuccess(res, finalResult, incomingUserId, handlerStart);
   }
 
   console.error('All bypass methods failed');
