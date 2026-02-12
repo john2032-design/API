@@ -12,7 +12,9 @@ const CONFIG = {
 const TRW_CONFIG = {
   BASE: 'https://trw.lat',
   API_KEY: 'TRW_FREE-GAY-15a92945-9b04-4c75-8337-f2a6007281e9',
-  POLL_INTERVAL: 500
+  POLL_INTERVAL: 500,
+  POLL_MAX_SECONDS: 120,
+  MAX_POLLS: 300
 };
 
 const N0V4_CONFIG = {
@@ -23,20 +25,16 @@ const NYTRALIS_CONFIG = {
   URL: 'https://nytralis-linkvertise.onrender.com/bypass'
 };
 
-const HOST_RULES = [
-  {
-    hosts: ['auth.platorelay.com', 'auth.platoboost.me', 'auth.platoboost.app'],
-    apis: ['n0v4']
-  },
-  {
-    hosts: ['linkvertise.com'],
-    apis: ['trw', 'nytralis']
-  },
-  {
-    hosts: ['keyrblx.com'],
-    apis: ['trwV2']
-  }
-];
+const HOST_RULES = {
+  'auth.platorelay.com': ['n0v4'],
+  'auth.platoboost.me': ['n0v4'],
+  'auth.platoboost.app': ['n0v4'],
+  'linkvertise.com': ['trw', 'nytralis'],
+  'keyrblx.com': ['trwV2'],
+  'work.ink': ['trw'],
+  'workink.net': ['trw'],
+  'cuty.io': ['trw']
+};
 
 const DEFAULT_APIS = ['trw'];
 
@@ -45,9 +43,10 @@ const matchesHostList = (hostname, list) =>
 
 const extractHostname = (url) => {
   try {
-    return new URL(url).hostname.toLowerCase();
+    let u = new URL(url.startsWith('http') ? url : 'https://' + url);
+    return u.hostname.toLowerCase().replace(/^www\./, '');
   } catch {
-    const match = url.match(/https?:\/\/([^\/?#]+)/i);
+    const match = url.match(/https?:\/\/(?:www\.)?([^\/?#]+)/i);
     return match ? match[1].toLowerCase() : '';
   }
 };
@@ -86,16 +85,21 @@ const postProcessResult = (result) => {
   return result;
 };
 
-const tryGenericGet = async (axios, apiUrl, url, headers, extractResult) => {
-  try {
-    const res = await axios.get(apiUrl, {
-      params: { url },
-      headers,
-      timeout: 0
-    });
-    return extractResult(res.data);
-  } catch (e) {
-    return { success: false, error: e?.message || String(e) };
+const tryGenericGet = async (axios, apiUrl, url, headers, extractResult, retries = 2) => {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await axios.get(apiUrl, {
+        params: { url },
+        headers,
+        timeout: 0
+      });
+      return extractResult(res.data);
+    } catch (e) {
+      if (attempt === retries) {
+        return { success: false, error: e?.message || String(e) };
+      }
+      await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+    }
   }
 };
 
@@ -117,7 +121,15 @@ const tryTrwV2 = async (axios, url) => {
     const data = createRes.data;
     if (data.status !== 'started' || !data.ThreadID) return { success: false };
     const taskId = data.ThreadID;
+    const pollStart = getCurrentTime();
+    let pollCount = 0;
     while (true) {
+      pollCount++;
+      const elapsed = Number(getCurrentTime() - pollStart) / 1_000_000_000;
+      if (elapsed > TRW_CONFIG.POLL_MAX_SECONDS || pollCount > TRW_CONFIG.MAX_POLLS) {
+        console.error(`TRW V2 polling timeout reached after ${TRW_CONFIG.POLL_MAX_SECONDS}s`);
+        return { success: false };
+      }
       await new Promise(r => setTimeout(r, TRW_CONFIG.POLL_INTERVAL));
       try {
         const checkRes = await axios.get(`${TRW_CONFIG.BASE}/api/v2/threadcheck`, {
@@ -163,8 +175,14 @@ const API_REGISTRY = {
 };
 
 const getApiChain = (hostname) => {
-  for (const rule of HOST_RULES) {
-    if (matchesHostList(hostname, rule.hosts)) return rule.apis;
+  for (const [host, apis] of Object.entries(HOST_RULES)) {
+    if (matchesHostList(hostname, [host])) {
+      let chain = [...apis];
+      if (chain.length === 1 && chain[0] !== 'trw') {
+        chain.push('trw');
+      }
+      return chain;
+    }
   }
   return DEFAULT_APIS;
 };
@@ -265,6 +283,8 @@ const setCorsHeaders = (req, res) => {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,x-user-id,x_user_id,x-userid,x-api-key');
 };
 
+let axiosInstance = null;
+
 module.exports = async (req, res) => {
   const handlerStart = getCurrentTime();
   console.log(`[${new Date().toISOString()}] ${req.method} request received`);
@@ -280,16 +300,21 @@ module.exports = async (req, res) => {
     return sendError(res, 400, 'Missing url parameter', handlerStart);
   }
   url = sanitizeUrl(url);
-  let axios;
-  try { axios = require('axios'); } catch {
-    console.error('axios module missing');
-    return sendError(res, 500, 'axios missing', handlerStart);
+  if (!axiosInstance) {
+    try {
+      axiosInstance = require('axios').create({ timeout: 0 });
+    } catch {
+      console.error('axios module missing');
+      return sendError(res, 500, 'axios missing', handlerStart);
+    }
   }
+  const axios = axiosInstance;
   const hostname = extractHostname(url);
   if (!hostname) {
     console.error('Invalid URL provided: ' + url);
     return sendError(res, 400, 'Invalid URL', handlerStart);
   }
+  const safeUrlLog = url.length > 80 ? url.substring(0, 80) + '...' : url;
   console.log('Processing URL with hostname: ' + hostname);
   const incomingUserId = getUserId(req);
   for (const special of SPECIAL_HANDLERS) {
