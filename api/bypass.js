@@ -26,7 +26,7 @@ const NYTRALIS_CONFIG = {
 const HOST_RULES = [
   {
     hosts: ['auth.platorelay.com', 'auth.platoboost.me', 'auth.platoboost.app'],
-    apis: ['n0v4', 'trw']
+    apis: ['n0v4', 'n0v4']
   },
   {
     hosts: ['linkvertise.com'],
@@ -34,7 +34,7 @@ const HOST_RULES = [
   },
   {
     hosts: ['keyrblx.com'],
-    apis: ['trw', 'trwV2']
+    apis: ['trw2', 'trwV2']
   }
 ];
 
