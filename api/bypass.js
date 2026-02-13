@@ -38,6 +38,34 @@ const HOST_RULES = {
 
 const DEFAULT_APIS = ['trw'];
 
+const ABYSM_FIRST_HOSTS = [
+  'socialwolvez.com',
+  'scwz.me',
+  'adfoc.us',
+  'unlocknow.net',
+  'sub2get.com',
+  'sub4unlock.com',
+  'sub2unlock.net',
+  'sub2unlock.com',
+  'mboost.me',
+  'paste-drop.com',
+  'pastebin.com',
+  'boost.ink',
+  'booo.st',
+  'bst.gg',
+  'bst.wtf',
+  'linkunlocker.com',
+  'unlk.link',
+  'link-unlock.com',
+  'direct-link.net',
+  'link-target.net',
+  'link-to.net',
+  'link-center.net',
+  'link-hub.net',
+  'up-to-down.net',
+  'linkvertise.com'
+];
+
 const matchesHostList = (hostname, list) =>
   list.some(h => hostname === h || hostname.endsWith('.' + h));
 
@@ -167,7 +195,30 @@ const tryNytralis = (axios, url) =>
       : { success: false }
   );
 
+const tryAbysm = async (axios, url) => {
+  try {
+    const res = await axios.get('https://api.abysm.lat/v2/free/bypass', {
+      params: { url }
+    });
+    const d = res.data;
+    if (!d) return { success: false, error: 'No response from Abysm' };
+    if (d.status === 'success' && d.data && d.data.result) {
+      return { success: true, result: d.data.result, raw: d };
+    }
+    if (d.status === 'fail') {
+      return { success: false, error: d.message || 'Abysm returned fail', abysmFail: true, raw: d };
+    }
+    if (d.result || (d.data && d.data.result)) {
+      return { success: true, result: d.result || d.data.result, raw: d };
+    }
+    return { success: false, error: 'Abysm unexpected response', raw: d };
+  } catch (e) {
+    return { success: false, error: e?.message || String(e) };
+  }
+};
+
 const API_REGISTRY = {
+  abysm: tryAbysm,
   trw: tryTrw,
   trwV2: tryTrwV2,
   n0v4: tryN0v4,
@@ -181,13 +232,24 @@ const getApiChain = (hostname) => {
       if (chain.length === 1 && chain[0] !== 'trw') {
         chain.push('trw');
       }
+      if (matchesHostList(hostname, ABYSM_FIRST_HOSTS)) {
+        if (chain[0] !== 'abysm') {
+          chain = ['abysm', ...chain];
+        }
+      }
       return chain;
     }
+  }
+  if (matchesHostList(hostname, ABYSM_FIRST_HOSTS)) {
+    const chain = ['abysm', ...DEFAULT_APIS.filter(a => a !== 'abysm')];
+    return chain;
   }
   return DEFAULT_APIS;
 };
 
-const executeApiChain = async (axios, url, apiNames) => {
+const executeApiChain = async (axios, url, apiNames, hostname) => {
+  const isAbysmHost = matchesHostList(hostname, ABYSM_FIRST_HOSTS);
+  let abysmRetried = false;
   for (let i = 0; i < apiNames.length; i++) {
     const name = apiNames[i];
     const fn = API_REGISTRY[name];
@@ -201,6 +263,17 @@ const executeApiChain = async (axios, url, apiNames) => {
       console.log(`${name} succeeded`);
       result.result = postProcessResult(result.result);
       return result;
+    }
+    if (name === 'abysm' && isAbysmHost && result.abysmFail && !abysmRetried) {
+      abysmRetried = true;
+      console.log('Abysm returned fail — retrying Abysm once (only) as requested...');
+      const retryRes = await fn(axios, url);
+      if (retryRes.success) {
+        console.log('Abysm retry succeeded');
+        retryRes.result = postProcessResult(retryRes.result);
+        return retryRes;
+      }
+      console.log('Abysm retry failed');
     }
     console.log(`${name} failed${i < apiNames.length - 1 ? ', trying next...' : ''}`);
   }
@@ -325,7 +398,7 @@ module.exports = async (req, res) => {
   }
   const apiChain = getApiChain(hostname);
   console.log(`API chain for ${hostname}: [${apiChain.join(' \u2192 ')}]`);
-  const result = await executeApiChain(axios, url, apiChain);
+  const result = await executeApiChain(axios, url, apiChain, hostname);
   if (result.success) {
     return sendSuccess(res, result.result, incomingUserId, handlerStart);
   }
