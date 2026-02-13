@@ -36,8 +36,6 @@ const HOST_RULES = {
   'cuty.io': ['trw']
 };
 
-const DEFAULT_APIS = ['trw'];
-
 const ABYSM_FIRST_HOSTS = [
   'socialwolvez.com',
   'scwz.me',
@@ -118,8 +116,7 @@ const tryGenericGet = async (axios, apiUrl, url, headers, extractResult, retries
     try {
       const res = await axios.get(apiUrl, {
         params: { url },
-        headers,
-        timeout: 0
+        headers
       });
       return extractResult(res.data);
     } catch (e) {
@@ -233,18 +230,15 @@ const getApiChain = (hostname) => {
         chain.push('trw');
       }
       if (matchesHostList(hostname, ABYSM_FIRST_HOSTS)) {
-        if (chain[0] !== 'abysm') {
-          chain = ['abysm', ...chain];
-        }
+        chain = ['abysm', ...chain.filter(a => a !== 'abysm')];
       }
       return chain;
     }
   }
   if (matchesHostList(hostname, ABYSM_FIRST_HOSTS)) {
-    const chain = ['abysm', ...DEFAULT_APIS.filter(a => a !== 'abysm')];
-    return chain;
+    return ['abysm'];
   }
-  return DEFAULT_APIS;
+  return [];
 };
 
 const executeApiChain = async (axios, url, apiNames, hostname) => {
@@ -296,8 +290,7 @@ const handlePasteTo = async (axios, url, incomingUserId, handlerStart, res) => {
       jsonUrl = url.split('#')[0];
     }
     const r = await axios.get(jsonUrl, {
-      headers: { Accept: 'application/json, text/javascript, */*; q=0.01' },
-      timeout: 0
+      headers: { Accept: 'application/json, text/javascript, */*; q=0.01' }
     });
     const data = r.data;
     if (!data || !data.ct || !data.adata) return sendError(res, 500, 'Paste data not found', handlerStart);
@@ -317,8 +310,7 @@ const handleKeySystem = async (axios, url, incomingUserId, handlerStart, res) =>
   const start = getCurrentTime();
   try {
     const r = await axios.get(url, {
-      headers: { Accept: 'text/html,*/*' },
-      timeout: 0
+      headers: { Accept: 'text/html,*/*' }
     });
     const body = String(r.data || '');
     const match = body.match(/id=["']keyText["'][^>]*>\s*([\s\S]*?)\s*<\/div>/i);
@@ -375,7 +367,7 @@ module.exports = async (req, res) => {
   url = sanitizeUrl(url);
   if (!axiosInstance) {
     try {
-      axiosInstance = require('axios').create({ timeout: 0 });
+      axiosInstance = require('axios').create({ timeout: 90000 });
     } catch {
       console.error('axios module missing');
       return sendError(res, 500, 'axios missing', handlerStart);
