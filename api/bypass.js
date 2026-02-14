@@ -7,9 +7,6 @@ const formatDuration = (startNs, endNs = process.hrtime.bigint()) => {
 
 const CONFIG = {
   SUPPORTED_METHODS: ['GET', 'POST'],
-  CACHE_TTL_MS: 5 * 60 * 1000,
-  MAX_CACHE_ENTRIES: 1500,
-  RESULT_MIN_LENGTH_TO_CACHE: 30,
   RATE_LIMIT_WINDOW_MS: 60000,
   MAX_REQUESTS_PER_WINDOW: 15
 };
@@ -74,24 +71,6 @@ const HOST_RULES = {
   'cuty.io': ['trw']
 };
 
-const CACHE_EXCLUDE_URL_PREFIXES = [
-  'https://hydrogen',
-  'https://spdmteam',
-  'https://auth.platorelay.com',
-  'https://ads.luarmor.net',
-  'https://key.'
-];
-
-const NO_CACHE_HOSTS = new Set([
-  'keyrblx.com',
-  'get-key.keysystem2352.workers.dev',
-  'get-key.keysystem352.workers.dev',
-  'cuty.io',
-  'work.ink',
-  'workink.net'
-]);
-
-const BYPASS_CACHE = new Map();
 const USER_RATE_LIMIT = new Map();
 
 const matchesHostList = (hostname, list) =>
@@ -140,62 +119,6 @@ const postProcessResult = (result) => {
   return result;
 };
 
-const shouldCacheResult = (result, originalUrl) => {
-  if (typeof result !== 'string' || result.length === 0) return false;
-  if (result.length < CONFIG.RESULT_MIN_LENGTH_TO_CACHE) return false;
-  const lower = result.toLowerCase();
-  if (lower.includes('error') || lower.includes('failed') || lower.includes('not found')) {
-    return false;
-  }
-  if (/key|code|token|pass|unlock/i.test(lower) && !lower.startsWith('http')) {
-    return false;
-  }
-  const hostname = extractHostname(originalUrl);
-  if (NO_CACHE_HOSTS.has(hostname)) return false;
-  return /^https?:\/\//i.test(result);
-};
-
-const isExcludedFromCache = (url) => {
-  const u = String(url).toLowerCase();
-  for (const p of CACHE_EXCLUDE_URL_PREFIXES) {
-    if (u.startsWith(p)) return true;
-  }
-  return false;
-};
-
-const getCacheKey = (url) => {
-  try {
-    const u = new URL(url.startsWith('http') ? url : 'https://' + url);
-    u.hash = '';
-    u.search = '';
-    return u.toString();
-  } catch {
-    return String(url);
-  }
-};
-
-const getCached = (url) => {
-  const key = getCacheKey(url);
-  const entry = BYPASS_CACHE.get(key);
-  if (!entry) return null;
-  if (Date.now() - entry.ts > CONFIG.CACHE_TTL_MS) {
-    BYPASS_CACHE.delete(key);
-    return null;
-  }
-  return entry.result;
-};
-
-const setCached = (url, result) => {
-  if (isExcludedFromCache(url)) return;
-  if (!shouldCacheResult(result, url)) return;
-  const key = getCacheKey(url);
-  BYPASS_CACHE.set(key, { result, ts: Date.now() });
-  if (BYPASS_CACHE.size > CONFIG.MAX_CACHE_ENTRIES) {
-    const firstKey = BYPASS_CACHE.keys().next().value;
-    BYPASS_CACHE.delete(firstKey);
-  }
-};
-
 const tryGenericGet = async (axios, apiUrl, url, headers, extractResult, retries = 2) => {
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -237,7 +160,6 @@ const tryTrwV2 = async (axios, url) => {
       pollCount++;
       const elapsed = Number(getCurrentTime() - pollStart) / 1_000_000_000;
       if (elapsed > TRW_CONFIG.POLL_MAX_SECONDS || pollCount > TRW_CONFIG.MAX_POLLS) {
-        console.error(`TRW V2 polling timeout reached after ${TRW_CONFIG.POLL_MAX_SECONDS}s`);
         return { success: false };
       }
       await new Promise(r => setTimeout(r, TRW_CONFIG.POLL_INTERVAL + Math.random() * 100));
@@ -249,16 +171,13 @@ const tryTrwV2 = async (axios, url) => {
         const c = checkRes.data;
         if (c.status === 'Done' && c.success && c.result) return { success: true, result: c.result };
         if (c.status === 'error' || c.status === 'failed' || c.error) {
-          console.error('TRW V2 task failed: ' + (c.message || JSON.stringify(c)));
           return { success: false };
         }
-      } catch (pollErr) {
-        console.error('TRW V2 poll error: ' + (pollErr?.message || String(pollErr)));
+      } catch {
         return { success: false };
       }
     }
-  } catch (e) {
-    console.error('TRW V2 error: ' + (e?.message || String(e)));
+  } catch {
     return { success: false };
   }
 };
@@ -269,19 +188,13 @@ const tryAbysmFree = async (axios, url) => {
       params: { url }
     });
     const d = res.data;
-    if (!d) return { success: false, error: 'No response from Abysm free' };
-    if (d.status === 'success' && d.data && d.data.result) {
-      return { success: true, result: d.data.result, raw: d };
+    if (d?.status === 'success' && d?.data?.result) {
+      return { success: true, result: d.data.result };
     }
-    if (d.status === 'fail') {
-      return { success: false, error: d.message || 'Abysm free returned fail', raw: d };
-    }
-    if (d.result || (d.data && d.data.result)) {
-      return { success: true, result: d.result || d.data.result, raw: d };
-    }
-    return { success: false, error: 'Abysm free unexpected response', raw: d };
-  } catch (e) {
-    return { success: false, error: e?.message || String(e) };
+    if (d?.result) return { success: true, result: d.result };
+    return { success: false };
+  } catch {
+    return { success: false };
   }
 };
 
@@ -293,19 +206,13 @@ const tryAbysmPaid = async (axios, url) => {
       timeout: 90000
     });
     const d = res.data;
-    if (!d) return { success: false, error: 'No response from Abysm paid' };
-    if (d.status === 'success' && d.data && d.data.result) {
-      return { success: true, result: d.data.result, raw: d };
+    if (d?.status === 'success' && d?.data?.result) {
+      return { success: true, result: d.data.result };
     }
-    if (d.status === 'fail') {
-      return { success: false, error: d.message || 'Abysm paid returned fail', raw: d };
-    }
-    if (d.result || (d.data && d.data.result)) {
-      return { success: true, result: d.result || d.data.result, raw: d };
-    }
-    return { success: false, error: 'Abysm paid unexpected response', raw: d };
-  } catch (e) {
-    return { success: false, error: e?.message || String(e) };
+    if (d?.result) return { success: true, result: d.result };
+    return { success: false };
+  } catch {
+    return { success: false };
   }
 };
 
@@ -329,90 +236,15 @@ const executeApiChain = async (axios, url, apiNames) => {
   for (let i = 0; i < apiNames.length; i++) {
     const name = apiNames[i];
     const fn = API_REGISTRY[name];
-    if (!fn) {
-      console.error(`Unknown API in chain: ${name}`);
-      continue;
-    }
-    console.log(`Attempting ${name}${i > 0 ? ' (fallback)' : ''}...`);
+    if (!fn) continue;
     const result = await fn(axios, url);
     if (result.success) {
       let final = postProcessResult(result.result);
-      setCached(url, final);
-      console.log(`${name} succeeded`);
       return { success: true, result: final };
     }
-    console.log(`${name} failed${i < apiNames.length - 1 ? ', trying next...' : ''}`);
   }
   return { success: false };
 };
-
-const handlePasteTo = async (axios, url, incomingUserId, handlerStart, res) => {
-  const start = getCurrentTime();
-  try {
-    let parsed;
-    try { parsed = new URL(url); } catch { parsed = null; }
-    const key = parsed && parsed.hash ? parsed.hash.slice(1) : (url.split('#')[1] || '');
-    if (!key) return sendError(res, 400, 'Missing paste key', handlerStart);
-    let jsonUrl;
-    if (parsed) {
-      const tmp = new URL(parsed.toString());
-      tmp.hash = '';
-      jsonUrl = tmp.toString();
-    } else {
-      jsonUrl = url.split('#')[0];
-    }
-    const r = await axios.get(jsonUrl, {
-      headers: { Accept: 'application/json, text/javascript, */*; q=0.01' }
-    });
-    const data = r.data;
-    if (!data || !data.ct || !data.adata) return sendError(res, 500, 'Paste data not found', handlerStart);
-    let lib;
-    try { lib = await import('privatebin-decrypt'); } catch { lib = require('privatebin-decrypt'); }
-    const decryptFn = lib.decryptPrivateBin || lib.default?.decryptPrivateBin || lib.default || lib;
-    if (typeof decryptFn !== 'function') return sendError(res, 500, 'privatebin-decrypt export not recognized', handlerStart);
-    const decrypted = await decryptFn({ key, data: data.adata, cipherMessage: data.ct });
-    if (shouldCacheResult(decrypted, url)) {
-      setCached(url, decrypted);
-    }
-    return sendSuccess(res, decrypted, incomingUserId, start);
-  } catch (e) {
-    console.error('Paste.to handling error: ' + (e?.message || String(e)));
-    return sendError(res, 500, `Paste.to handling failed: ${String(e?.message || e)}`, handlerStart);
-  }
-};
-
-const handleKeySystem = async (axios, url, incomingUserId, handlerStart, res) => {
-  const start = getCurrentTime();
-  try {
-    const r = await axios.get(url, {
-      headers: { Accept: 'text/html,*/*' }
-    });
-    const body = String(r.data || '');
-    const match = body.match(/id=["']keyText["'][^>]*>\s*([\s\S]*?)\s*<\/div>/i);
-    if (!match) return sendError(res, 500, 'keyText not found', handlerStart);
-    const keyText = match[1].trim();
-    if (shouldCacheResult(keyText, url)) {
-      setCached(url, keyText);
-    }
-    return sendSuccess(res, keyText, incomingUserId, start);
-  } catch (e) {
-    console.error('KeySystem handling error: ' + (e?.message || String(e)));
-    return sendError(res, 500, `Key fetch failed: ${String(e?.message || e)}`, handlerStart);
-  }
-};
-
-const SPECIAL_HANDLERS = [
-  {
-    match: (h) => h === 'paste.to' || h.endsWith('.paste.to'),
-    handler: handlePasteTo,
-    label: 'paste.to'
-  },
-  {
-    match: (h) => h === 'get-key.keysystem2352.workers.dev' || h === 'get-key.keysystem352.workers.dev',
-    handler: handleKeySystem,
-    label: 'keysystem'
-  }
-];
 
 const setCorsHeaders = (req, res) => {
   const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',') || ['*'];
@@ -431,69 +263,67 @@ let axiosInstance = null;
 
 module.exports = async (req, res) => {
   const handlerStart = getCurrentTime();
-  console.log(`[${new Date().toISOString()}] ${req.method} request received`);
   setCorsHeaders(req, res);
+
   if (req.method === 'OPTIONS') return res.status(200).end();
+
   if (!CONFIG.SUPPORTED_METHODS.includes(req.method)) {
-    console.error('Method not allowed: ' + req.method);
     return sendError(res, 405, 'Method not allowed', handlerStart);
   }
+
   let url = req.method === 'GET' ? req.query.url : req.body?.url;
+
   if (!url || typeof url !== 'string') {
-    console.error('Missing or invalid url parameter');
     return sendError(res, 400, 'Missing url parameter', handlerStart);
   }
+
   url = sanitizeUrl(url);
+
   if (!/^https?:\/\//i.test(url)) {
     return sendError(res, 400, 'URL must start with http:// or https://', handlerStart);
   }
+
   if (!axiosInstance) {
     axiosInstance = require('axios').create({
       timeout: 90000,
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BypassBot/2.0)' }
     });
   }
+
   const axios = axiosInstance;
   const hostname = extractHostname(url);
+
   if (!hostname) {
-    console.error('Invalid URL provided: ' + url);
     return sendError(res, 400, 'Invalid URL', handlerStart);
   }
-  const safeUrlLog = url.length > 80 ? url.substring(0, 80) + '...' : url;
-  console.log('Processing URL with hostname: ' + hostname);
+
   const incomingUserId = getUserId(req);
   const userKey = incomingUserId || req.headers['x-forwarded-for'] || req.ip || 'anonymous';
+
   const now = Date.now();
-  if (!USER_RATE_LIMIT.has(userKey)) {
-    USER_RATE_LIMIT.set(userKey, []);
-  }
+
+  if (!USER_RATE_LIMIT.has(userKey)) USER_RATE_LIMIT.set(userKey, []);
+
   let times = USER_RATE_LIMIT.get(userKey);
   times = times.filter(t => now - t < CONFIG.RATE_LIMIT_WINDOW_MS);
   times.push(now);
   USER_RATE_LIMIT.set(userKey, times);
+
   if (times.length > CONFIG.MAX_REQUESTS_PER_WINDOW) {
     return sendError(res, 429, 'Rate limit exceeded', handlerStart);
   }
-  const cached = getCached(url);
-  if (cached) {
-    return sendSuccess(res, cached, incomingUserId, handlerStart);
-  }
-  for (const special of SPECIAL_HANDLERS) {
-    if (special.match(hostname)) {
-      console.log(`Handling ${special.label} URL`);
-      return await special.handler(axios, url, incomingUserId, handlerStart, res);
-    }
-  }
+
   const apiChain = getApiChain(hostname);
-  console.log(`API chain for ${hostname}: [${apiChain.join(' \u2192 ')}]`);
+
   if (!apiChain || apiChain.length === 0) {
-    console.error('No bypass APIs configured for this host');
     return sendError(res, 400, 'No bypass method for host', handlerStart);
   }
+
   const result = await executeApiChain(axios, url, apiChain);
+
   if (result.success) {
     return sendSuccess(res, result.result, incomingUserId, handlerStart);
   }
-  console.error('All bypass methods failed');
+
   return sendError(res, 500, 'Bypass Failed :(', handlerStart);
 };
