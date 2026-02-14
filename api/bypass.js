@@ -6,7 +6,12 @@ const formatDuration = (startNs, endNs = process.hrtime.bigint()) => {
 };
 
 const CONFIG = {
-  SUPPORTED_METHODS: ['GET', 'POST']
+  SUPPORTED_METHODS: ['GET', 'POST'],
+  CACHE_TTL_MS: 5 * 60 * 1000,
+  MAX_CACHE_ENTRIES: 1500,
+  RESULT_MIN_LENGTH_TO_CACHE: 30,
+  RATE_LIMIT_WINDOW_MS: 60000,
+  MAX_REQUESTS_PER_WINDOW: 15
 };
 
 const TRW_CONFIG = {
@@ -69,15 +74,25 @@ const HOST_RULES = {
   'cuty.io': ['trw']
 };
 
-const CACHE_TTL_MS = 5 * 60 * 1000;
-const BYPASS_CACHE = new Map();
-const CACHE_EXCLUDE_PREFIXES = [
+const CACHE_EXCLUDE_URL_PREFIXES = [
   'https://hydrogen',
   'https://spdmteam',
   'https://auth.platorelay.com',
   'https://ads.luarmor.net',
   'https://key.'
 ];
+
+const NO_CACHE_HOSTS = new Set([
+  'keyrblx.com',
+  'get-key.keysystem2352.workers.dev',
+  'get-key.keysystem352.workers.dev',
+  'cuty.io',
+  'work.ink',
+  'workink.net'
+]);
+
+const BYPASS_CACHE = new Map();
+const USER_RATE_LIMIT = new Map();
 
 const matchesHostList = (hostname, list) =>
   list.some(h => hostname === h || hostname.endsWith('.' + h));
@@ -87,8 +102,7 @@ const extractHostname = (url) => {
     let u = new URL(url.startsWith('http') ? url : 'https://' + url);
     return u.hostname.toLowerCase().replace(/^www\./, '');
   } catch {
-    const match = url.match(/https?:\/\/(?:www\.)?([^\/?#]+)/i);
-    return match ? match[1].toLowerCase() : '';
+    return '';
   }
 };
 
@@ -126,19 +140,45 @@ const postProcessResult = (result) => {
   return result;
 };
 
+const shouldCacheResult = (result, originalUrl) => {
+  if (typeof result !== 'string' || result.length === 0) return false;
+  if (result.length < CONFIG.RESULT_MIN_LENGTH_TO_CACHE) return false;
+  const lower = result.toLowerCase();
+  if (lower.includes('error') || lower.includes('failed') || lower.includes('not found')) {
+    return false;
+  }
+  if (/key|code|token|pass|unlock/i.test(lower) && !lower.startsWith('http')) {
+    return false;
+  }
+  const hostname = extractHostname(originalUrl);
+  if (NO_CACHE_HOSTS.has(hostname)) return false;
+  return /^https?:\/\//i.test(result);
+};
+
 const isExcludedFromCache = (url) => {
   const u = String(url).toLowerCase();
-  for (const p of CACHE_EXCLUDE_PREFIXES) {
+  for (const p of CACHE_EXCLUDE_URL_PREFIXES) {
     if (u.startsWith(p)) return true;
   }
   return false;
 };
 
+const getCacheKey = (url) => {
+  try {
+    const u = new URL(url.startsWith('http') ? url : 'https://' + url);
+    u.hash = '';
+    u.search = '';
+    return u.toString();
+  } catch {
+    return String(url);
+  }
+};
+
 const getCached = (url) => {
-  const key = String(url);
+  const key = getCacheKey(url);
   const entry = BYPASS_CACHE.get(key);
   if (!entry) return null;
-  if (Date.now() - entry.ts > CACHE_TTL_MS) {
+  if (Date.now() - entry.ts > CONFIG.CACHE_TTL_MS) {
     BYPASS_CACHE.delete(key);
     return null;
   }
@@ -147,9 +187,13 @@ const getCached = (url) => {
 
 const setCached = (url, result) => {
   if (isExcludedFromCache(url)) return;
-  if (typeof result !== 'string') return;
-  const key = String(url);
+  if (!shouldCacheResult(result, url)) return;
+  const key = getCacheKey(url);
   BYPASS_CACHE.set(key, { result, ts: Date.now() });
+  if (BYPASS_CACHE.size > CONFIG.MAX_CACHE_ENTRIES) {
+    const firstKey = BYPASS_CACHE.keys().next().value;
+    BYPASS_CACHE.delete(firstKey);
+  }
 };
 
 const tryGenericGet = async (axios, apiUrl, url, headers, extractResult, retries = 2) => {
@@ -196,7 +240,7 @@ const tryTrwV2 = async (axios, url) => {
         console.error(`TRW V2 polling timeout reached after ${TRW_CONFIG.POLL_MAX_SECONDS}s`);
         return { success: false };
       }
-      await new Promise(r => setTimeout(r, TRW_CONFIG.POLL_INTERVAL));
+      await new Promise(r => setTimeout(r, TRW_CONFIG.POLL_INTERVAL + Math.random() * 100));
       try {
         const checkRes = await axios.get(`${TRW_CONFIG.BASE}/api/v2/threadcheck`, {
           params: { id: taskId },
@@ -327,6 +371,9 @@ const handlePasteTo = async (axios, url, incomingUserId, handlerStart, res) => {
     const decryptFn = lib.decryptPrivateBin || lib.default?.decryptPrivateBin || lib.default || lib;
     if (typeof decryptFn !== 'function') return sendError(res, 500, 'privatebin-decrypt export not recognized', handlerStart);
     const decrypted = await decryptFn({ key, data: data.adata, cipherMessage: data.ct });
+    if (shouldCacheResult(decrypted, url)) {
+      setCached(url, decrypted);
+    }
     return sendSuccess(res, decrypted, incomingUserId, start);
   } catch (e) {
     console.error('Paste.to handling error: ' + (e?.message || String(e)));
@@ -343,7 +390,11 @@ const handleKeySystem = async (axios, url, incomingUserId, handlerStart, res) =>
     const body = String(r.data || '');
     const match = body.match(/id=["']keyText["'][^>]*>\s*([\s\S]*?)\s*<\/div>/i);
     if (!match) return sendError(res, 500, 'keyText not found', handlerStart);
-    return sendSuccess(res, match[1].trim(), incomingUserId, start);
+    const keyText = match[1].trim();
+    if (shouldCacheResult(keyText, url)) {
+      setCached(url, keyText);
+    }
+    return sendSuccess(res, keyText, incomingUserId, start);
   } catch (e) {
     console.error('KeySystem handling error: ' + (e?.message || String(e)));
     return sendError(res, 500, `Key fetch failed: ${String(e?.message || e)}`, handlerStart);
@@ -393,13 +444,14 @@ module.exports = async (req, res) => {
     return sendError(res, 400, 'Missing url parameter', handlerStart);
   }
   url = sanitizeUrl(url);
+  if (!/^https?:\/\//i.test(url)) {
+    return sendError(res, 400, 'URL must start with http:// or https://', handlerStart);
+  }
   if (!axiosInstance) {
-    try {
-      axiosInstance = require('axios').create({ timeout: 90000 });
-    } catch {
-      console.error('axios module missing');
-      return sendError(res, 500, 'axios missing', handlerStart);
-    }
+    axiosInstance = require('axios').create({
+      timeout: 90000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BypassBot/2.0)' }
+    });
   }
   const axios = axiosInstance;
   const hostname = extractHostname(url);
@@ -410,15 +462,27 @@ module.exports = async (req, res) => {
   const safeUrlLog = url.length > 80 ? url.substring(0, 80) + '...' : url;
   console.log('Processing URL with hostname: ' + hostname);
   const incomingUserId = getUserId(req);
+  const userKey = incomingUserId || req.headers['x-forwarded-for'] || req.ip || 'anonymous';
+  const now = Date.now();
+  if (!USER_RATE_LIMIT.has(userKey)) {
+    USER_RATE_LIMIT.set(userKey, []);
+  }
+  let times = USER_RATE_LIMIT.get(userKey);
+  times = times.filter(t => now - t < CONFIG.RATE_LIMIT_WINDOW_MS);
+  times.push(now);
+  USER_RATE_LIMIT.set(userKey, times);
+  if (times.length > CONFIG.MAX_REQUESTS_PER_WINDOW) {
+    return sendError(res, 429, 'Rate limit exceeded', handlerStart);
+  }
+  const cached = getCached(url);
+  if (cached) {
+    return sendSuccess(res, cached, incomingUserId, handlerStart);
+  }
   for (const special of SPECIAL_HANDLERS) {
     if (special.match(hostname)) {
       console.log(`Handling ${special.label} URL`);
       return await special.handler(axios, url, incomingUserId, handlerStart, res);
     }
-  }
-  const cached = getCached(url);
-  if (cached) {
-    return sendSuccess(res, cached, incomingUserId, handlerStart);
   }
   const apiChain = getApiChain(hostname);
   console.log(`API chain for ${hostname}: [${apiChain.join(' \u2192 ')}]`);
