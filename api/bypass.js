@@ -74,7 +74,7 @@ const BYPASS_CACHE = new Map();
 const CACHE_EXCLUDE_PREFIXES = [
   'https://hydrogen',
   'https://spdmteam',
-  'https://auth.plato',
+  'https://auth.platorelay.com',
   'https://ads.luarmor.net',
   'https://key.'
 ];
