@@ -121,7 +121,7 @@ const sendSuccess = (res, result, userId, startTime) =>
 
 const postProcessResult = (result) => {
   if (typeof result === 'string' && /^https?:\/\/ads\.luarmor\.net\//i.test(result)) {
-    return `https://montelopiuy.pythonanywhere.com/redirect?to=${result}`;
+    return `https://vortixworld-luarmor.vercel.app/redirect?to=${result}`;
   }
   return result;
 };
