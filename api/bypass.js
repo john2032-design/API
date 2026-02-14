@@ -17,51 +17,66 @@ const TRW_CONFIG = {
   MAX_POLLS: 300
 };
 
-const N0V4_CONFIG = {
-  URL: 'https://n0v4-api.onrender.com/bypass'
-};
-
-const NYTRALIS_CONFIG = {
-  URL: 'https://nytralis-linkvertise.onrender.com/bypass'
-};
-
 const HOST_RULES = {
-  'auth.platorelay.com': ['n0v4'],
-  'auth.platoboost.me': ['n0v4'],
-  'auth.platoboost.app': ['n0v4'],
-  'linkvertise.com': ['trw', 'nytralis'],
+  'socialwolvez.com': ['abysmPaid', 'abysm'],
+  'scwz.me': ['abysmPaid', 'abysm'],
+  'adfoc.us': ['abysmPaid', 'abysm'],
+  'unlocknow.net': ['abysmPaid', 'abysm'],
+  'sub2get.com': ['abysmPaid', 'abysm'],
+  'sub4unlock.com': ['abysmPaid', 'abysm'],
+  'sub2unlock.net': ['abysmPaid', 'abysm'],
+  'sub2unlock.com': ['abysmPaid', 'abysm'],
+  'mboost.me': ['abysmPaid', 'abysm'],
+  'paste-drop.com': ['abysmPaid', 'abysm'],
+  'pastebin.com': ['abysmPaid', 'abysm'],
+  'mobile.codex.lol': ['abysmPaid', 'abysm'],
+  'lockr.so': ['abysmPaid', 'abysm'],
+  'rentry.co': ['abysmPaid', 'abysm'],
+  'deltaios-executor.com': ['abysmPaid', 'abysm'],
+  'krnl-ios.com': ['abysmPaid', 'abysm'],
+  'auth.platorelay.com': ['abysmPaid', 'abysm'],
+  'auth.platoboost.me': ['abysmPaid', 'abysm'],
+  'auth.platoboost.app': ['abysmPaid', 'abysm'],
+  'auth.platoboost.net': ['abysmPaid', 'abysm'],
+  'auth.platoboost.click': ['abysmPaid', 'abysm'],
+  'rekonise.com': ['abysmPaid', 'abysm'],
+  'rkns.link': ['abysmPaid', 'abysm'],
+  'rekonise.org': ['abysmPaid', 'abysm'],
+  'loot-link.com': ['abysmPaid', 'abysm'],
+  'lootlink.org': ['abysmPaid', 'abysm'],
+  'lootlinks.co': ['abysmPaid', 'abysm'],
+  'lootdest.info': ['abysmPaid', 'abysm'],
+  'lootdest.org': ['abysmPaid', 'abysm'],
+  'lootdest.com': ['abysmPaid', 'abysm'],
+  'links-loot.com': ['abysmPaid', 'abysm'],
+  'loot-links.com': ['abysmPaid', 'abysm'],
+  'best-links.org': ['abysmPaid', 'abysm'],
+  'lootlinks.com': ['abysmPaid', 'abysm'],
+  'loot-labs.com': ['abysmPaid', 'abysm'],
+  'lootlabs.com': ['abysmPaid', 'abysm'],
+  'boost.ink': ['abysmPaid', 'abysm'],
+  'booo.st': ['abysmPaid', 'abysm'],
+  'bst.gg': ['abysmPaid', 'abysm'],
+  'bst.wtf': ['abysmPaid', 'abysm'],
+  'linkunlocker.com': ['abysmPaid', 'abysm'],
+  'unlk.link': ['abysmPaid', 'abysm'],
+  'link-unlock.com': ['abysmPaid', 'abysm'],
+  'krnl.cat': ['abysmPaid', 'abysm'],
+  'linkvertise.com': ['abysmPaid', 'abysm', 'trw'],
   'keyrblx.com': ['trwV2'],
   'work.ink': ['trw'],
   'workink.net': ['trw'],
   'cuty.io': ['trw']
 };
 
-const ABYSM_FIRST_HOSTS = [
-  'socialwolvez.com',
-  'scwz.me',
-  'adfoc.us',
-  'unlocknow.net',
-  'sub2get.com',
-  'sub4unlock.com',
-  'sub2unlock.net',
-  'sub2unlock.com',
-  'mboost.me',
-  'paste-drop.com',
-  'pastebin.com',
-  'boost.ink',
-  'booo.st',
-  'bst.gg',
-  'bst.wtf',
-  'linkunlocker.com',
-  'unlk.link',
-  'link-unlock.com',
-  'direct-link.net',
-  'link-target.net',
-  'link-to.net',
-  'link-center.net',
-  'link-hub.net',
-  'up-to-down.net',
-  'linkvertise.com'
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const BYPASS_CACHE = new Map();
+const CACHE_EXCLUDE_PREFIXES = [
+  'https://hydrogen',
+  'https://spdmteam',
+  'https://auth.plato',
+  'https://ads.luarmor.net',
+  'https://key.'
 ];
 
 const matchesHostList = (hostname, list) =>
@@ -109,6 +124,32 @@ const postProcessResult = (result) => {
     return `https://montelopiuy.pythonanywhere.com/redirect?to=${result}`;
   }
   return result;
+};
+
+const isExcludedFromCache = (url) => {
+  const u = String(url).toLowerCase();
+  for (const p of CACHE_EXCLUDE_PREFIXES) {
+    if (u.startsWith(p)) return true;
+  }
+  return false;
+};
+
+const getCached = (url) => {
+  const key = String(url);
+  const entry = BYPASS_CACHE.get(key);
+  if (!entry) return null;
+  if (Date.now() - entry.ts > CACHE_TTL_MS) {
+    BYPASS_CACHE.delete(key);
+    return null;
+  }
+  return entry.result;
+};
+
+const setCached = (url, result) => {
+  if (isExcludedFromCache(url)) return;
+  if (typeof result !== 'string') return;
+  const key = String(url);
+  BYPASS_CACHE.set(key, { result, ts: Date.now() });
 };
 
 const tryGenericGet = async (axios, apiUrl, url, headers, extractResult, retries = 2) => {
@@ -178,72 +219,69 @@ const tryTrwV2 = async (axios, url) => {
   }
 };
 
-const tryN0v4 = (axios, url) =>
-  tryGenericGet(axios, N0V4_CONFIG.URL, url, {}, (data) =>
-    data && (data.result || data.data)
-      ? { success: true, result: data.result || data.data }
-      : { success: false }
-  );
-
-const tryNytralis = (axios, url) =>
-  tryGenericGet(axios, NYTRALIS_CONFIG.URL, url, {}, (data) =>
-    data && (data.result || data.data)
-      ? { success: true, result: data.result || data.data }
-      : { success: false }
-  );
-
-const tryAbysm = async (axios, url) => {
+const tryAbysmFree = async (axios, url) => {
   try {
     const res = await axios.get('https://api.abysm.lat/v2/free/bypass', {
       params: { url }
     });
     const d = res.data;
-    if (!d) return { success: false, error: 'No response from Abysm' };
+    if (!d) return { success: false, error: 'No response from Abysm free' };
     if (d.status === 'success' && d.data && d.data.result) {
       return { success: true, result: d.data.result, raw: d };
     }
     if (d.status === 'fail') {
-      return { success: false, error: d.message || 'Abysm returned fail', abysmFail: true, raw: d };
+      return { success: false, error: d.message || 'Abysm free returned fail', raw: d };
     }
     if (d.result || (d.data && d.data.result)) {
       return { success: true, result: d.result || d.data.result, raw: d };
     }
-    return { success: false, error: 'Abysm unexpected response', raw: d };
+    return { success: false, error: 'Abysm free unexpected response', raw: d };
+  } catch (e) {
+    return { success: false, error: e?.message || String(e) };
+  }
+};
+
+const tryAbysmPaid = async (axios, url) => {
+  try {
+    const res = await axios.get('https://api.abysm.lat/v2/bypass', {
+      params: { url },
+      headers: { 'x-api-key': 'ABYSM-185EF369-E519-4670-969E-137F07BB52B8' },
+      timeout: 90000
+    });
+    const d = res.data;
+    if (!d) return { success: false, error: 'No response from Abysm paid' };
+    if (d.status === 'success' && d.data && d.data.result) {
+      return { success: true, result: d.data.result, raw: d };
+    }
+    if (d.status === 'fail') {
+      return { success: false, error: d.message || 'Abysm paid returned fail', raw: d };
+    }
+    if (d.result || (d.data && d.data.result)) {
+      return { success: true, result: d.result || d.data.result, raw: d };
+    }
+    return { success: false, error: 'Abysm paid unexpected response', raw: d };
   } catch (e) {
     return { success: false, error: e?.message || String(e) };
   }
 };
 
 const API_REGISTRY = {
-  abysm: tryAbysm,
+  abysmPaid: tryAbysmPaid,
+  abysm: tryAbysmFree,
   trw: tryTrw,
-  trwV2: tryTrwV2,
-  n0v4: tryN0v4,
-  nytralis: tryNytralis
+  trwV2: tryTrwV2
 };
 
 const getApiChain = (hostname) => {
   for (const [host, apis] of Object.entries(HOST_RULES)) {
     if (matchesHostList(hostname, [host])) {
-      let chain = [...apis];
-      if (chain.length === 1 && chain[0] !== 'trw') {
-        chain.push('trw');
-      }
-      if (matchesHostList(hostname, ABYSM_FIRST_HOSTS)) {
-        chain = ['abysm', ...chain.filter(a => a !== 'abysm')];
-      }
-      return chain;
+      return [...apis];
     }
-  }
-  if (matchesHostList(hostname, ABYSM_FIRST_HOSTS)) {
-    return ['abysm'];
   }
   return [];
 };
 
-const executeApiChain = async (axios, url, apiNames, hostname) => {
-  const isAbysmHost = matchesHostList(hostname, ABYSM_FIRST_HOSTS);
-  let abysmRetried = false;
+const executeApiChain = async (axios, url, apiNames) => {
   for (let i = 0; i < apiNames.length; i++) {
     const name = apiNames[i];
     const fn = API_REGISTRY[name];
@@ -254,20 +292,10 @@ const executeApiChain = async (axios, url, apiNames, hostname) => {
     console.log(`Attempting ${name}${i > 0 ? ' (fallback)' : ''}...`);
     const result = await fn(axios, url);
     if (result.success) {
+      let final = postProcessResult(result.result);
+      setCached(url, final);
       console.log(`${name} succeeded`);
-      result.result = postProcessResult(result.result);
-      return result;
-    }
-    if (name === 'abysm' && isAbysmHost && result.abysmFail && !abysmRetried) {
-      abysmRetried = true;
-      console.log('Abysm returned fail — retrying Abysm once (only) as requested...');
-      const retryRes = await fn(axios, url);
-      if (retryRes.success) {
-        console.log('Abysm retry succeeded');
-        retryRes.result = postProcessResult(retryRes.result);
-        return retryRes;
-      }
-      console.log('Abysm retry failed');
+      return { success: true, result: final };
     }
     console.log(`${name} failed${i < apiNames.length - 1 ? ', trying next...' : ''}`);
   }
@@ -388,9 +416,17 @@ module.exports = async (req, res) => {
       return await special.handler(axios, url, incomingUserId, handlerStart, res);
     }
   }
+  const cached = getCached(url);
+  if (cached) {
+    return sendSuccess(res, cached, incomingUserId, handlerStart);
+  }
   const apiChain = getApiChain(hostname);
   console.log(`API chain for ${hostname}: [${apiChain.join(' \u2192 ')}]`);
-  const result = await executeApiChain(axios, url, apiChain, hostname);
+  if (!apiChain || apiChain.length === 0) {
+    console.error('No bypass APIs configured for this host');
+    return sendError(res, 400, 'No bypass method for host', handlerStart);
+  }
+  const result = await executeApiChain(axios, url, apiChain);
   if (result.success) {
     return sendSuccess(res, result.result, incomingUserId, handlerStart);
   }
