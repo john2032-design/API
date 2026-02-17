@@ -140,7 +140,7 @@ const tryTrw = (axios, url) =>
   tryGenericGet(axios, `${TRW_CONFIG.BASE}/api/bypass`, url, { 'x-api-key': TRW_CONFIG.API_KEY }, (data) =>
     data.success && data.result
       ? { success: true, result: data.result }
-      : { success: false }
+      : { success: false, error: data?.error || data?.message || null }
   );
 
 const tryTrwV2 = async (axios, url) => {
@@ -152,7 +152,7 @@ const tryTrwV2 = async (axios, url) => {
       timeout: 0
     });
     const data = createRes.data;
-    if (data.status !== 'started' || !data.ThreadID) return { success: false };
+    if (data.status !== 'started' || !data.ThreadID) return { success: false, error: data?.error || data?.message || null };
     const taskId = data.ThreadID;
     const pollStart = getCurrentTime();
     let pollCount = 0;
@@ -160,7 +160,7 @@ const tryTrwV2 = async (axios, url) => {
       pollCount++;
       const elapsed = Number(getCurrentTime() - pollStart) / 1_000_000_000;
       if (elapsed > TRW_CONFIG.POLL_MAX_SECONDS || pollCount > TRW_CONFIG.MAX_POLLS) {
-        return { success: false };
+        return { success: false, error: 'TRW V2 poll timeout' };
       }
       await new Promise(r => setTimeout(r, TRW_CONFIG.POLL_INTERVAL + Math.random() * 100));
       try {
@@ -171,14 +171,14 @@ const tryTrwV2 = async (axios, url) => {
         const c = checkRes.data;
         if (c.status === 'Done' && c.success && c.result) return { success: true, result: c.result };
         if (c.status === 'error' || c.status === 'failed' || c.error) {
-          return { success: false };
+          return { success: false, error: c?.error || c?.message || 'trw v2 failed' };
         }
-      } catch {
-        return { success: false };
+      } catch (e) {
+        return { success: false, error: e?.message || String(e) };
       }
     }
-  } catch {
-    return { success: false };
+  } catch (e) {
+    return { success: false, error: e?.message || String(e) };
   }
 };
 
@@ -192,9 +192,9 @@ const tryAbysmFree = async (axios, url) => {
       return { success: true, result: d.data.result };
     }
     if (d?.result) return { success: true, result: d.result };
-    return { success: false };
-  } catch {
-    return { success: false };
+    return { success: false, error: d?.error || d?.message || null };
+  } catch (e) {
+    return { success: false, error: e?.message || String(e) };
   }
 };
 
@@ -210,9 +210,9 @@ const tryAbysmPaid = async (axios, url) => {
       return { success: true, result: d.data.result };
     }
     if (d?.result) return { success: true, result: d.result };
-    return { success: false };
-  } catch {
-    return { success: false };
+    return { success: false, error: d?.error || d?.message || null };
+  } catch (e) {
+    return { success: false, error: e?.message || String(e) };
   }
 };
 
@@ -233,17 +233,46 @@ const getApiChain = (hostname) => {
 };
 
 const executeApiChain = async (axios, url, apiNames) => {
+  let lastError = null;
   for (let i = 0; i < apiNames.length; i++) {
     const name = apiNames[i];
     const fn = API_REGISTRY[name];
     if (!fn) continue;
-    const result = await fn(axios, url);
-    if (result.success) {
-      let final = postProcessResult(result.result);
-      return { success: true, result: final };
+    try {
+      const result = await fn(axios, url);
+      if (result && result.success) {
+        let final = postProcessResult(result.result);
+        return { success: true, result: final };
+      } else {
+        lastError = (result && (result.error || result.message || result.result)) || lastError || 'Unknown error from upstream API';
+      }
+    } catch (e) {
+      lastError = e?.message || String(e);
     }
   }
-  return { success: false };
+  return { success: false, error: lastError };
+};
+
+const checkPastebinNotFound = async (axios, url) => {
+  try {
+    const r = await axios.get(url, { timeout: 15000, headers: { Accept: 'text/html,application/xhtml+xml' } });
+    const html = (typeof r.data === 'string') ? r.data : JSON.stringify(r.data);
+    const notFoundHeader = /<h1>\s*Not Found\s*\(#404\)\s*<\/h1>/i;
+    const paraMatch = /<p[^>]*>\s*"?\s*This page is no longer available\.[\s\S]*?Pastebin staff\."?\s*<\/p>/i;
+    if (notFoundHeader.test(html) && paraMatch.test(html)) {
+      const pTextMatch = html.match(/<p[^>]*>\s*("?)([\s\S]*?)(\1)\s*<\/p>/i);
+      if (pTextMatch && pTextMatch[2]) {
+        const raw = pTextMatch[2].replace(/<\/?[^>]+(>|$)/g, '').trim();
+        const canonicalSentenceMatch = raw.match(/This page is no longer available\.[\s\S]*?Pastebin staff\./i);
+        const message = canonicalSentenceMatch ? canonicalSentenceMatch[0].trim() : raw;
+        return { found: true, message };
+      }
+      return { found: true, message: 'This page is no longer available. It has either expired, been removed by its creator, or removed by one of the Pastebin staff.' };
+    }
+    return { found: false };
+  } catch (e) {
+    return { found: false, error: e?.message || String(e) };
+  }
 };
 
 const setCorsHeaders = (req, res) => {
@@ -325,5 +354,13 @@ module.exports = async (req, res) => {
     return sendSuccess(res, result.result, incomingUserId, handlerStart);
   }
 
-  return sendError(res, 500, 'Bypass Failed :(', handlerStart);
+  if (hostname === 'pastebin.com' || hostname.endsWith('.pastebin.com')) {
+    const pb = await checkPastebinNotFound(axios, url);
+    if (pb && pb.found) {
+      return sendError(res, 404, pb.message, handlerStart);
+    }
+  }
+
+  const upstreamMsg = result.error || result.message || result.result || 'Bypass failed';
+  return sendError(res, 500, upstreamMsg, handlerStart);
 };
