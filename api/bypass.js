@@ -257,17 +257,13 @@ const checkPastebinNotFound = async (axios, url) => {
   try {
     const r = await axios.get(url, { timeout: 15000, headers: { Accept: 'text/html,application/xhtml+xml' } });
     const html = (typeof r.data === 'string') ? r.data : JSON.stringify(r.data);
-    const notFoundHeader = /<h1>\s*Not Found\s*\(#404\)\s*<\/h1>/i;
-    const paraMatch = /<p[^>]*>\s*"?\s*This page is no longer available\.[\s\S]*?Pastebin staff\."?\s*<\/p>/i;
-    if (notFoundHeader.test(html) && paraMatch.test(html)) {
-      const pTextMatch = html.match(/<p[^>]*>\s*("?)([\s\S]*?)(\1)\s*<\/p>/i);
-      if (pTextMatch && pTextMatch[2]) {
-        const raw = pTextMatch[2].replace(/<\/?[^>]+(>|$)/g, '').trim();
-        const canonicalSentenceMatch = raw.match(/This page is no longer available\.[\s\S]*?Pastebin staff\./i);
-        const message = canonicalSentenceMatch ? canonicalSentenceMatch[0].trim() : raw;
-        return { found: true, message };
+    const headerRegex = /<h1[^>]*>\s*Not\s+Found\s*\(#404\)\s*<\/h1>/i;
+    const sentenceRegex = /(This page is no longer available\.\s*It has either expired,\s*been removed by its creator,\s*or removed by one of the Pastebin staff\.)/i;
+    if (headerRegex.test(html)) {
+      const sMatch = html.match(sentenceRegex);
+      if (sMatch && sMatch[1]) {
+        return { found: true, message: sMatch[1].trim() };
       }
-      return { found: true, message: 'This page is no longer available. It has either expired, been removed by its creator, or removed by one of the Pastebin staff.' };
     }
     return { found: false };
   } catch (e) {
@@ -293,74 +289,54 @@ let axiosInstance = null;
 module.exports = async (req, res) => {
   const handlerStart = getCurrentTime();
   setCorsHeaders(req, res);
-
   if (req.method === 'OPTIONS') return res.status(200).end();
-
   if (!CONFIG.SUPPORTED_METHODS.includes(req.method)) {
     return sendError(res, 405, 'Method not allowed', handlerStart);
   }
-
   let url = req.method === 'GET' ? req.query.url : req.body?.url;
-
   if (!url || typeof url !== 'string') {
     return sendError(res, 400, 'Missing url parameter', handlerStart);
   }
-
   url = sanitizeUrl(url);
-
   if (!/^https?:\/\//i.test(url)) {
     return sendError(res, 400, 'URL must start with http:// or https://', handlerStart);
   }
-
   if (!axiosInstance) {
     axiosInstance = require('axios').create({
       timeout: 90000,
       headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BypassBot/2.0)' }
     });
   }
-
   const axios = axiosInstance;
   const hostname = extractHostname(url);
-
   if (!hostname) {
     return sendError(res, 400, 'Invalid URL', handlerStart);
   }
-
   const incomingUserId = getUserId(req);
   const userKey = incomingUserId || req.headers['x-forwarded-for'] || req.ip || 'anonymous';
-
   const now = Date.now();
-
   if (!USER_RATE_LIMIT.has(userKey)) USER_RATE_LIMIT.set(userKey, []);
-
   let times = USER_RATE_LIMIT.get(userKey);
   times = times.filter(t => now - t < CONFIG.RATE_LIMIT_WINDOW_MS);
   times.push(now);
   USER_RATE_LIMIT.set(userKey, times);
-
   if (times.length > CONFIG.MAX_REQUESTS_PER_WINDOW) {
     return sendError(res, 429, 'Rate limit exceeded', handlerStart);
   }
-
   const apiChain = getApiChain(hostname);
-
   if (!apiChain || apiChain.length === 0) {
     return sendError(res, 400, 'No bypass method for host', handlerStart);
   }
-
-  const result = await executeApiChain(axios, url, apiChain);
-
-  if (result.success) {
-    return sendSuccess(res, result.result, incomingUserId, handlerStart);
-  }
-
   if (hostname === 'pastebin.com' || hostname.endsWith('.pastebin.com')) {
     const pb = await checkPastebinNotFound(axios, url);
     if (pb && pb.found) {
       return sendError(res, 404, pb.message, handlerStart);
     }
   }
-
+  const result = await executeApiChain(axios, url, apiChain);
+  if (result.success) {
+    return sendSuccess(res, result.result, incomingUserId, handlerStart);
+  }
   const upstreamMsg = result.error || result.message || result.result || 'Bypass failed';
   return sendError(res, 500, upstreamMsg, handlerStart);
 };
