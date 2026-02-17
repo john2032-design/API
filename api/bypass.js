@@ -254,21 +254,39 @@ const executeApiChain = async (axios, url, apiNames) => {
 };
 
 const checkPastebinNotFound = async (axios, url) => {
+  const candidates = [];
   try {
-    const r = await axios.get(url, { timeout: 15000, headers: { Accept: 'text/html,application/xhtml+xml' } });
-    const html = (typeof r.data === 'string') ? r.data : JSON.stringify(r.data);
-    const headerRegex = /<h1[^>]*>\s*Not\s+Found\s*\(#404\)\s*<\/h1>/i;
-    const sentenceRegex = /(This page is no longer available\.\s*It has either expired,\s*been removed by its creator,\s*or removed by one of the Pastebin staff\.)/i;
-    if (headerRegex.test(html)) {
-      const sMatch = html.match(sentenceRegex);
-      if (sMatch && sMatch[1]) {
-        return { found: true, message: sMatch[1].trim() };
-      }
+    const u = new URL(url.startsWith('http') ? url : 'https://' + url);
+    if (u.pathname.includes('/raw/')) {
+      const pagePath = u.pathname.replace('/raw/', '/');
+      const pageUrl = `${u.protocol}//${u.hostname}${pagePath}`.split('?')[0];
+      candidates.push(pageUrl);
     }
-    return { found: false };
-  } catch (e) {
-    return { found: false, error: e?.message || String(e) };
+  } catch {}
+  candidates.push(url);
+  for (let i = 0; i < candidates.length; i++) {
+    try {
+      const r = await axios.get(candidates[i], {
+        timeout: 15000,
+        headers: { Accept: 'text/html,application/xhtml+xml,text/plain' },
+        responseType: 'text'
+      });
+      const html = typeof r.data === 'string' ? r.data : String(r.data);
+      const headerRegex = /Not Found\s*\(#404\)/i;
+      const sentenceRegex = /This page is no longer available\.[\s\S]*?Pastebin staff\./i;
+      if (headerRegex.test(html) || sentenceRegex.test(html)) {
+        const m = html.match(sentenceRegex);
+        if (m && m[0]) {
+          const cleaned = m[0].replace(/<\/?[^>]+(>|$)/g, '').trim();
+          return { found: true, message: cleaned };
+        }
+        return { found: true, message: 'This page is no longer available. It has either expired, been removed by its creator, or removed by one of the Pastebin staff.' };
+      }
+    } catch (e) {
+      continue;
+    }
   }
+  return { found: false };
 };
 
 const setCorsHeaders = (req, res) => {
