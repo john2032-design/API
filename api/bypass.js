@@ -20,51 +20,34 @@ const TRW_CONFIG = {
 };
 
 const HOST_RULES = {
-  'socialwolvez.com': ['abysmPaid', 'abysm'],
-  'scwz.me': ['abysmPaid', 'abysm'],
-  'adfoc.us': ['abysmPaid', 'abysm'],
-  'unlocknow.net': ['abysmPaid', 'abysm'],
-  'sub2get.com': ['abysmPaid', 'abysm'],
-  'sub4unlock.com': ['abysmPaid', 'abysm'],
-  'sub2unlock.net': ['abysmPaid', 'abysm'],
-  'sub2unlock.com': ['abysmPaid', 'abysm'],
-  'mboost.me': ['abysmPaid', 'abysm'],
-  'paste-drop.com': ['abysmPaid', 'abysm'],
-  'pastebin.com': ['abysmPaid', 'abysm'],
-  'mobile.codex.lol': ['abysmPaid', 'abysm'],
-  'lockr.so': ['abysmPaid', 'abysm'],
-  'rentry.co': ['abysmPaid', 'abysm'],
-  'deltaios-executor.com': ['abysmPaid', 'abysm'],
-  'krnl-ios.com': ['abysmPaid', 'abysm'],
-  'auth.platorelay.com': ['abysmPaid', 'abysm'],
-  'auth.platoboost.me': ['abysmPaid', 'abysm'],
-  'auth.platoboost.app': ['abysmPaid', 'abysm'],
-  'auth.platoboost.net': ['abysmPaid', 'abysm'],
-  'auth.platoboost.click': ['abysmPaid', 'abysm'],
-  'rekonise.com': ['abysmPaid', 'abysm'],
-  'rkns.link': ['abysmPaid', 'abysm'],
-  'rekonise.org': ['abysmPaid', 'abysm'],
-  'loot-link.com': ['abysmPaid', 'abysm'],
-  'lootlink.org': ['abysmPaid', 'abysm'],
-  'lootlinks.co': ['abysmPaid', 'abysm'],
-  'lootdest.info': ['abysmPaid', 'abysm'],
-  'lootdest.org': ['abysmPaid', 'abysm'],
-  'lootdest.com': ['abysmPaid', 'abysm'],
-  'links-loot.com': ['abysmPaid', 'abysm'],
-  'loot-links.com': ['abysmPaid', 'abysm'],
-  'best-links.org': ['abysmPaid', 'abysm'],
-  'lootlinks.com': ['abysmPaid', 'abysm'],
-  'loot-labs.com': ['abysmPaid', 'abysm'],
-  'lootlabs.com': ['abysmPaid', 'abysm'],
-  'boost.ink': ['abysmPaid', 'abysm'],
-  'booo.st': ['abysmPaid', 'abysm'],
-  'bst.gg': ['abysmPaid', 'abysm'],
-  'bst.wtf': ['abysmPaid', 'abysm'],
-  'linkunlocker.com': ['abysmPaid', 'abysm'],
-  'unlk.link': ['abysmPaid', 'abysm'],
-  'link-unlock.com': ['abysmPaid', 'abysm'],
-  'krnl.cat': ['abysmPaid', 'abysm'],
-  'linkvertise.com': ['abysmPaid', 'abysm', 'trw'],
+  'socialwolvez.com': ['abysm'],
+  'scwz.me': ['abysm'],
+  'adfoc.us': ['abysm'],
+  'unlocknow.net': ['abysm'],
+  'sub2get.com': ['abysm'],
+  'sub4unlock.com': ['abysm'],
+  'sub2unlock.net': ['abysm'],
+  'sub2unlock.com': ['abysm'],
+  'mboost.me': ['abysm'],
+  'paste-drop.com': ['abysm'],
+  'pastebin.com': ['abysm'],
+  'mobile.codex.lol': ['abysm'],
+  'lockr.so': ['abysm'],
+  'rentry.co': ['abysm'],
+  'deltaios-executor.com': ['abysm'],
+  'krnl-ios.com': ['abysm'],
+  'rekonise.com': ['abysm'],
+  'rkns.link': ['abysm'],
+  'rekonise.org': ['abysm'],
+  'boost.ink': ['abysm'],
+  'booo.st': ['abysm'],
+  'bst.gg': ['abysm'],
+  'bst.wtf': ['abysm'],
+  'linkunlocker.com': ['abysm'],
+  'unlk.link': ['abysm'],
+  'link-unlock.com': ['abysm'],
+  'krnl.cat': ['abysm'],
+  'linkvertise.com': ['abysm','trw'],
   'keyrblx.com': ['trwV2'],
   'work.ink': ['trw'],
   'workink.net': ['trw'],
@@ -198,26 +181,7 @@ const tryAbysmFree = async (axios, url) => {
   }
 };
 
-const tryAbysmPaid = async (axios, url) => {
-  try {
-    const res = await axios.get('https://api.abysm.lat/v2/bypass', {
-      params: { url },
-      headers: { 'x-api-key': 'ABYSM-185EF369-E519-4670-969E-137F07BB52B8' },
-      timeout: 90000
-    });
-    const d = res.data;
-    if (d?.status === 'success' && d?.data?.result) {
-      return { success: true, result: d.data.result };
-    }
-    if (d?.result) return { success: true, result: d.result };
-    return { success: false, error: d?.error || d?.message || null };
-  } catch (e) {
-    return { success: false, error: e?.message || String(e) };
-  }
-};
-
 const API_REGISTRY = {
-  abysmPaid: tryAbysmPaid,
   abysm: tryAbysmFree,
   trw: tryTrw,
   trwV2: tryTrwV2
