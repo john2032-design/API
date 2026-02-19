@@ -277,7 +277,7 @@ module.exports = async (req, res) => {
   }
   let url = req.method === 'GET' ? req.query.url : req.body?.url;
   if (!url || typeof url !== 'string') {
-    return sendError(res, 400, 'Missing url parameter', handlerStart);
+    return sendError(res, 400, 'Missing URL parameter', handlerStart);
   }
   url = sanitizeUrl(url);
   if (!/^https?:\/\//i.test(url)) {
@@ -292,7 +292,7 @@ module.exports = async (req, res) => {
   const axios = axiosInstance;
   const hostname = extractHostname(url);
   if (!hostname) {
-    return sendError(res, 400, 'Invalid URL', handlerStart);
+    return sendError(res, 400, 'Invalid URL Send a Valid URL.', handlerStart);
   }
   const incomingUserId = getUserId(req);
   const userKey = incomingUserId || req.headers['x-forwarded-for'] || req.ip || 'anonymous';
@@ -303,11 +303,11 @@ module.exports = async (req, res) => {
   times.push(now);
   USER_RATE_LIMIT.set(userKey, times);
   if (times.length > CONFIG.MAX_REQUESTS_PER_WINDOW) {
-    return sendError(res, 429, 'Rate limit exceeded', handlerStart);
+    return sendError(res, 429, 'Rate-limit Reached Try Again Later.', handlerStart);
   }
   const apiChain = getApiChain(hostname);
   if (!apiChain || apiChain.length === 0) {
-    return sendError(res, 400, 'No bypass method for host', handlerStart);
+    return sendError(res, 400, 'All Backup APIs Failed Try Again.', handlerStart);
   }
   if (hostname === 'pastebin.com' || hostname.endsWith('.pastebin.com')) {
     const pb = await checkPastebinNotFound(axios, url);
@@ -319,6 +319,6 @@ module.exports = async (req, res) => {
   if (result.success) {
     return sendSuccess(res, result.result, incomingUserId, handlerStart);
   }
-  const upstreamMsg = result.error || result.message || result.result || 'Bypass failed';
+  const upstreamMsg = result.error || result.message || result.result || 'Bypass Failed Try Again.';
   return sendError(res, 500, upstreamMsg, handlerStart);
 };
