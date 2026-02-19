@@ -47,7 +47,7 @@ const HOST_RULES = {
   'unlk.link': ['abysm'],
   'link-unlock.com': ['abysm'],
   'krnl.cat': ['abysm'],
-  'linkvertise.com': ['abysm','trw'],
+  'linkvertise.com': ['trw','abysm'],
   'keyrblx.com': ['trwV2'],
   'work.ink': ['trw'],
   'workink.net': ['trw'],
