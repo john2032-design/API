@@ -175,9 +175,17 @@ const tryAbysmFree = async (axios, url) => {
       return { success: true, result: d.data.result };
     }
     if (d?.result) return { success: true, result: d.result };
-    return { success: false, error: d?.error || d?.message || null };
+    let errorMsg = d?.error || d?.message || null;
+    if (errorMsg && (errorMsg.includes('error') || errorMsg.includes('fail') || errorMsg.includes('failed'))) {
+      errorMsg = 'Bypass Failed';
+    }
+    return { success: false, error: errorMsg };
   } catch (e) {
-    return { success: false, error: e?.message || String(e) };
+    let errorMsg = e?.message || String(e);
+    if (errorMsg.includes('error') || errorMsg.includes('fail') || errorMsg.includes('failed')) {
+      errorMsg = 'Bypass Failed';
+    }
+    return { success: false, error: errorMsg };
   }
 };
 
@@ -305,6 +313,101 @@ module.exports = async (req, res) => {
   if (times.length > CONFIG.MAX_REQUESTS_PER_WINDOW) {
     return sendError(res, 429, 'Rate-limit Reached Try Again Later.', handlerStart);
   }
+
+  if (hostname === 'paste.to' || hostname.endsWith('.paste.to')) {
+    const start = getCurrentTime();
+    try {
+      let parsed;
+      try { parsed = new URL(url); } catch { parsed = null; }
+      const key = parsed && parsed.hash ? parsed.hash.slice(1) : (url.split('#')[1] || '');
+      if (!key) {
+        return res.status(400).json({
+          status: 'error',
+          result: 'Missing paste key',
+          time_taken: formatDuration(handlerStart)
+        });
+      }
+      const jsonUrl = parsed ? (parsed.hash = '', parsed.toString()) : url.split('#')[0];
+      const r = await axios.get(jsonUrl, {
+        headers: { Accept: 'application/json, text/javascript, */*; q=0.01' }
+      });
+      const data = r.data;
+      if (!data || !data.ct || !data.adata) {
+        return res.status(500).json({
+          status: 'error',
+          result: 'Paste data not found',
+          time_taken: formatDuration(handlerStart)
+        });
+      }
+      let lib;
+      try { lib = await import('privatebin-decrypt'); } catch { lib = require('privatebin-decrypt'); }
+      const decryptFn =
+        lib.decryptPrivateBin ||
+        lib.default?.decryptPrivateBin ||
+        lib.default ||
+        lib;
+      if (typeof decryptFn !== 'function') {
+        return res.status(500).json({
+          status: 'error',
+          result: 'privatebin-decrypt export not recognized',
+          time_taken: formatDuration(handlerStart)
+        });
+      }
+      let decrypted;
+      try {
+        decrypted = await decryptFn({
+          key,
+          data: data.adata,
+          cipherMessage: data.ct
+        });
+      } catch (e) {
+        return res.status(500).json({
+          status: 'error',
+          result: `Decryption failed: ${String(e.message || e)}`,
+          time_taken: formatDuration(handlerStart)
+        });
+      }
+      return res.json({
+        status: 'success',
+        result: decrypted,
+        time_taken: formatDuration(start)
+      });
+    } catch (e) {
+      return res.status(500).json({
+        status: 'error',
+        result: `Paste.to handling failed: ${String(e.message || e)}`,
+        time_taken: formatDuration(handlerStart)
+      });
+    }
+  }
+
+  if (hostname === 'get-key.keysystem352.workers.dev') {
+    try {
+      const r = await axios.get(url, {
+        headers: { Accept: 'text/html' },
+        responseType: 'text'
+      });
+      const html = typeof r.data === 'string' ? r.data : String(r.data);
+      const structure = '<div class="container">\n    <div class="title">Your Access Key</div>\n    <div class="divider"></div>\n    <div class="key-text" id="keyText">';
+      const index = html.indexOf(structure);
+      if (index === -1) {
+        return sendError(res, 500, 'Key structure not found', handlerStart);
+      }
+      const startIndex = index + structure.length;
+      const endIndex = html.indexOf('</div>', startIndex);
+      if (endIndex === -1) {
+        return sendError(res, 500, 'Key end not found', handlerStart);
+      }
+      const key = html.substring(startIndex, endIndex).trim();
+      if (!key.startsWith('KEY_')) {
+        return sendError(res, 500, 'Invalid key format', handlerStart);
+      }
+      return sendSuccess(res, key, incomingUserId, handlerStart);
+    } catch (e) {
+      return sendError(res, 500, `Key extraction failed: ${String(e.message || e)}`, handlerStart);
+    }
+  }
+
   const apiChain = getApiChain(hostname);
   if (!apiChain || apiChain.length === 0) {
     return sendError(res, 400, 'All Backup APIs Failed Try Again.', handlerStart);
