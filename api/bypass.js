@@ -19,6 +19,14 @@ const TRW_CONFIG = {
   MAX_POLLS: 300
 };
 
+const BYPASSTOOLS_CONFIG = {
+  BASE: 'https://api.bypass.tools/api/v1/bypass',
+  API_KEY: 'bt_11abf887e8b9d2df169b48ce47e7cc8feefb3e75ed4ff8d6',
+  POLL_INTERVAL: 1000,
+  POLL_MAX_SECONDS: 60,
+  MAX_POLLS: 60
+};
+
 const HOST_RULES = {
   'socialwolvez.com': ['bypassTools', 'abysm'],
   'scwz.me': ['bypassTools', 'abysm'],
@@ -191,7 +199,7 @@ const tryAbysmFree = async (axios, url) => {
 
 const tryBypassTools = async (axios, url) => {
   const headers = {
-    'x-api-key': 'bt_11abf887e8b9d2df169b48ce47e7cc8feefb3e75ed4ff8d6',
+    'x-api-key': BYPASSTOOLS_CONFIG.API_KEY,
     'Content-Type': 'application/json'
   };
   const body = {
@@ -199,12 +207,28 @@ const tryBypassTools = async (axios, url) => {
     refresh: false
   };
   try {
-    const res = await axios.post('https://api.bypass.tools/api/v1/bypass/direct', body, { headers });
-    const data = res.data;
-    if (data.status === 'success' && data.result) {
-      return { success: true, result: data.result };
-    } else {
-      return { success: false, error: data.message || 'Bypass failed' };
+    const createRes = await axios.post(`${BYPASSTOOLS_CONFIG.BASE}/createTask`, body, { headers });
+    const data = createRes.data;
+    if (data.status !== 'success' || !data.taskId) {
+      return { success: false, error: data.message || 'Task creation failed' };
+    }
+    const taskId = data.taskId;
+    const pollStart = getCurrentTime();
+    let pollCount = 0;
+    while (true) {
+      pollCount++;
+      const elapsed = Number(getCurrentTime() - pollStart) / 1_000_000_000;
+      if (elapsed > BYPASSTOOLS_CONFIG.POLL_MAX_SECONDS || pollCount > BYPASSTOOLS_CONFIG.MAX_POLLS) {
+        return { success: false, error: 'Bypass tools poll timeout' };
+      }
+      await new Promise(r => setTimeout(r, BYPASSTOOLS_CONFIG.POLL_INTERVAL));
+      const checkRes = await axios.get(`${BYPASSTOOLS_CONFIG.BASE}/getTaskResult/${taskId}`, { headers });
+      const c = checkRes.data;
+      if (c.status === 'success' && c.result) {
+        return { success: true, result: c.result };
+      } else if (c.status === 'error') {
+        return { success: false, error: c.message || 'Bypass failed' };
+      }
     }
   } catch (e) {
     return { success: false, error: e.message || String(e) };
