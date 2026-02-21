@@ -28,35 +28,35 @@ const BYPASSTOOLS_CONFIG = {
 };
 
 const HOST_RULES = {
-  'socialwolvez.com': ['bypassTools', 'abysm'],
-  'scwz.me': ['bypassTools', 'abysm'],
-  'adfoc.us': ['bypassTools', 'abysm'],
-  'unlocknow.net': ['bypassTools', 'abysm'],
-  'sub2get.com': ['bypassTools', 'abysm'],
-  'sub4unlock.com': ['bypassTools', 'abysm'],
-  'sub2unlock.net': ['bypassTools', 'abysm'],
-  'sub2unlock.com': ['bypassTools', 'abysm'],
-  'mboost.me': ['bypassTools', 'abysm'],
-  'paste-drop.com': ['bypassTools', 'abysm'],
-  'pastebin.com': ['bypassTools', 'abysm'],
-  'mobile.codex.lol': ['bypassTools', 'abysm'],
-  'lockr.so': ['bypassTools', 'abysm'],
-  'rentry.co': ['bypassTools', 'abysm'],
-  'deltaios-executor.com': ['bypassTools', 'abysm'],
-  'krnl-ios.com': ['bypassTools', 'abysm'],
-  'rekonise.com': ['bypassTools', 'abysm'],
-  'rkns.link': ['bypassTools', 'abysm'],
-  'rekonise.org': ['bypassTools', 'abysm'],
-  'boost.ink': ['bypassTools', 'abysm'],
-  'booo.st': ['bypassTools', 'abysm'],
-  'bst.gg': ['bypassTools', 'abysm'],
-  'bst.wtf': ['bypassTools', 'abysm'],
-  'linkunlocker.com': ['bypassTools', 'abysm'],
-  'unlk.link': ['bypassTools', 'abysm'],
-  'link-unlock.com': ['bypassTools', 'abysm'],
-  'krnl.cat': ['bypassTools', 'abysm'],
-  'linkvertise.com': ['bypassTools', 'trw','abysm'],
-  'keyrblx.com': ['bypassTools', 'trwV2'],
+  'socialwolvez.com': ['bypassTools'],
+  'scwz.me': ['bypassTools'],
+  'adfoc.us': ['bypassTools'],
+  'unlocknow.net': ['bypassTools'],
+  'sub2get.com': ['bypassTools'],
+  'sub4unlock.com': ['bypassTools'],
+  'sub2unlock.net': ['bypassTools'],
+  'sub2unlock.com': ['bypassTools'],
+  'mboost.me': ['bypassTools'],
+  'paste-drop.com': ['bypassTools'],
+  'pastebin.com': ['bypassTools'],
+  'mobile.codex.lol': ['bypassTools'],
+  'lockr.so': ['bypassTools'],
+  'rentry.co': ['bypassTools'],
+  'deltaios-executor.com': ['bypassTools'],
+  'krnl-ios.com': ['bypassTools'],
+  'rekonise.com': ['bypassTools'],
+  'rkns.link': ['bypassTools'],
+  'rekonise.org': ['bypassTools'],
+  'boost.ink': ['bypassTools'],
+  'booo.st': ['bypassTools'],
+  'bst.gg': ['bypassTools'],
+  'bst.wtf': ['bypassTools'],
+  'linkunlocker.com': ['bypassTools'],
+  'unlk.link': ['bypassTools'],
+  'link-unlock.com': ['bypassTools'],
+  'krnl.cat': ['bypassTools'],
+  'linkvertise.com': ['bypassTools', 'trw'],
+  'keyrblx.com': ['bypassTools'],
   'work.ink': ['bypassTools', 'trw'],
   'workink.net': ['bypassTools', 'trw'],
   'cuty.io': ['bypassTools', 'trw']
@@ -134,69 +134,6 @@ const tryTrw = (axios, url) =>
       : { success: false, error: data?.error || data?.message || null }
   );
 
-const tryTrwV2 = async (axios, url) => {
-  const headers = { 'x-api-key': TRW_CONFIG.API_KEY };
-  try {
-    const createRes = await axios.get(`${TRW_CONFIG.BASE}/api/v2/bypass`, {
-      params: { url },
-      headers,
-      timeout: 0
-    });
-    const data = createRes.data;
-    if (data.status !== 'started' || !data.ThreadID) return { success: false, error: data?.error || data?.message || null };
-    const taskId = data.ThreadID;
-    const pollStart = getCurrentTime();
-    let pollCount = 0;
-    while (true) {
-      pollCount++;
-      const elapsed = Number(getCurrentTime() - pollStart) / 1_000_000_000;
-      if (elapsed > TRW_CONFIG.POLL_MAX_SECONDS || pollCount > TRW_CONFIG.MAX_POLLS) {
-        return { success: false, error: 'TRW V2 poll timeout' };
-      }
-      await new Promise(r => setTimeout(r, TRW_CONFIG.POLL_INTERVAL + Math.random() * 100));
-      try {
-        const checkRes = await axios.get(`${TRW_CONFIG.BASE}/api/v2/threadcheck`, {
-          params: { id: taskId },
-          timeout: 0
-        });
-        const c = checkRes.data;
-        if (c.status === 'Done' && c.success && c.result) return { success: true, result: c.result };
-        if (c.status === 'error' || c.status === 'failed' || c.error) {
-          return { success: false, error: c?.error || c?.message || 'trw v2 failed' };
-        }
-      } catch (e) {
-        return { success: false, error: e?.message || String(e) };
-      }
-    }
-  } catch (e) {
-    return { success: false, error: e?.message || String(e) };
-  }
-};
-
-const tryAbysmFree = async (axios, url) => {
-  try {
-    const res = await axios.get('https://api.abysm.lat/v2/free/bypass', {
-      params: { url }
-    });
-    const d = res.data;
-    if (d?.status === 'success' && d?.data?.result) {
-      return { success: true, result: d.data.result };
-    }
-    if (d?.result) return { success: true, result: d.result };
-    let errorMsg = d?.error || d?.message || null;
-    if (errorMsg && (errorMsg.includes('error') || errorMsg.includes('fail') || errorMsg.includes('failed'))) {
-      errorMsg = 'Bypass Failed';
-    }
-    return { success: false, error: errorMsg };
-  } catch (e) {
-    let errorMsg = e?.message || String(e);
-    if (errorMsg.includes('error') || errorMsg.includes('fail') || errorMsg.includes('failed')) {
-      errorMsg = 'Bypass Failed';
-    }
-    return { success: false, error: errorMsg };
-  }
-};
-
 const tryBypassTools = async (axios, url) => {
   const headers = {
     'x-api-key': BYPASSTOOLS_CONFIG.API_KEY,
@@ -236,9 +173,7 @@ const tryBypassTools = async (axios, url) => {
 };
 
 const API_REGISTRY = {
-  abysm: tryAbysmFree,
   trw: tryTrw,
-  trwV2: tryTrwV2,
   bypassTools: tryBypassTools
 };
 
@@ -248,7 +183,7 @@ const getApiChain = (hostname) => {
       return [...apis];
     }
   }
-  return ['bypassTools', 'trw', 'abysm'];
+  return ['bypassTools'];
 };
 
 const executeApiChain = async (axios, url, apiNames) => {
